@@ -1,0 +1,22 @@
+app = "cinema-pce"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_NAME = "Cinema PCE"
+  APP_ENV = "production"
+  APP_URL = "https://cinema-pce.fly.dev"
+  DB_HOST = "reserva-online-mysql-pcelias.internal"
+  DB_PORT = "3306"
+  DB_NAME = "cinema_pce"
+  DB_USER = "cinema_pce"
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]

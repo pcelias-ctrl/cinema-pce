@@ -1,0 +1,6 @@
+/.env
+/.cinema-db-pass.local
+/public/uploads/*
+!/public/uploads/.gitkeep
+!/public/uploads/movies/
+!/public/uploads/movies/.gitkeep
