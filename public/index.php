@@ -44,6 +44,7 @@ function layout(string $title, callable $content): void
                     <?php endif; ?>
                     <a href="index.php?route=sales">Venda</a>
                     <a href="index.php?route=cash_register">Caixa</a>
+                    <a href="index.php?route=qr_reader">Leitor QR</a>
                     <?php if ($user['role'] === 'administrador'): ?>
                         <a href="index.php?route=users">Usuários</a>
                     <?php endif; ?>
@@ -194,6 +195,19 @@ function normalize_datetime_local(string $value): ?string
 function sale_code(): string
 {
     return 'V' . date('YmdHis') . strtoupper(bin2hex(random_bytes(3)));
+}
+
+function ticket_token(): string
+{
+    return bin2hex(random_bytes(24));
+}
+
+function app_url(string $route, array $params = []): string
+{
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $query = http_build_query(array_merge(['route' => $route], $params));
+    return $scheme . '://' . $host . '/index.php?' . $query;
 }
 
 function open_cash_register(?int $userId = null): ?array
@@ -971,9 +985,10 @@ try {
             }
 
             $code = sale_code();
+            $qrToken = ticket_token();
             $insert = db()->prepare(
-                'INSERT INTO tickets (showtime_id, room_seat_id, seller_user_id, cash_register_id, sale_code, buyer_name, payment_method, unit_price, total_amount, amount_paid, change_amount, status, sold_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "vendido", NOW())'
+                'INSERT INTO tickets (showtime_id, room_seat_id, seller_user_id, cash_register_id, sale_code, qr_token, buyer_name, payment_method, unit_price, total_amount, amount_paid, change_amount, status, sold_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "vendido", NOW())'
             );
             foreach ($availableSeats as $seat) {
                 $insert->execute([
@@ -982,6 +997,7 @@ try {
                     (int) Auth::user()['id'],
                     (int) $cash['id'],
                     $code,
+                    $qrToken,
                     $buyerName ?: null,
                     $paymentMethod,
                     $unitPrice,
@@ -1074,7 +1090,7 @@ try {
         Auth::requireLogin();
         $saleCode = trim($_GET['sale_code'] ?? '');
         $stmt = db()->prepare(
-            'SELECT tickets.*, room_seats.seat_code, movies.title movie_title, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
+            'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
              FROM tickets
              INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
              INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
@@ -1089,7 +1105,8 @@ try {
             throw new RuntimeException('Venda não encontrada.');
         }
         $first = $tickets[0];
-        layout('Ingresso', function () use ($tickets, $first) {
+        $validationUrl = app_url('ticket_validate', ['token' => $first['qr_token'] ?: $first['sale_code']]);
+        layout('Ingresso', function () use ($tickets, $first, $validationUrl) {
             ?>
             <div class="section-head no-print">
                 <h1>Ingresso emitido</h1>
@@ -1112,8 +1129,135 @@ try {
                     <p><strong>Recebido:</strong> R$ <?= e(number_format((float) $first['amount_paid'], 2, ',', '.')) ?></p>
                     <p><strong>Troco:</strong> R$ <?= e(number_format((float) $first['change_amount'], 2, ',', '.')) ?></p>
                 <?php endif; ?>
+                <div class="qr-ticket">
+                    <canvas id="ticket-qr" data-url="<?= e($validationUrl) ?>"></canvas>
+                    <p><strong>QR Code:</strong> <?= e($first['qr_token'] ?: $first['sale_code']) ?></p>
+                </div>
                 <p class="muted">Apresente este ingresso na entrada.</p>
             </section>
+            <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+            <script src="assets/js/ticket-qr.js"></script>
+            <?php
+        });
+        exit;
+    }
+
+    if ($route === 'qr_reader') {
+        Auth::requireLogin();
+        layout('Leitor QR', function () {
+            ?>
+            <div class="section-head">
+                <div>
+                    <h1>Leitor de QR Code</h1>
+                    <p class="muted">Aponte a câmera para o QR Code do ingresso.</p>
+                </div>
+            </div>
+            <section class="panel qr-reader-panel">
+                <div class="qr-camera-box">
+                    <video id="qr-video" playsinline muted></video>
+                    <canvas id="qr-canvas" hidden></canvas>
+                </div>
+                <div class="qr-reader-actions">
+                    <button class="button primary" id="start-qr-reader" type="button">Abrir câmera</button>
+                    <button class="button" id="stop-qr-reader" type="button" disabled>Parar</button>
+                </div>
+                <p class="muted" id="qr-reader-status">Use em HTTPS no celular para liberar a câmera.</p>
+                <form method="get" class="form qr-manual-form">
+                    <input type="hidden" name="route" value="ticket_validate">
+                    <label>Código ou link do QR
+                        <input name="token" placeholder="Cole o código lido ou a URL do ingresso">
+                    </label>
+                    <button class="button primary">Validar manualmente</button>
+                </form>
+            </section>
+            <script src="assets/js/qr-reader.js"></script>
+            <?php
+        });
+        exit;
+    }
+
+    if ($route === 'ticket_validate') {
+        Auth::requireLogin();
+        $rawToken = trim($_GET['token'] ?? $_POST['token'] ?? '');
+        if (str_contains($rawToken, 'ticket_validate')) {
+            $parts = parse_url($rawToken);
+            parse_str($parts['query'] ?? '', $query);
+            $rawToken = trim($query['token'] ?? $rawToken);
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            $stmt = db()->prepare('UPDATE tickets SET checked_in_at = NOW(), checked_in_by = ? WHERE (qr_token = ? OR sale_code = ?) AND status = "vendido" AND checked_in_at IS NULL');
+            $stmt->execute([(int) Auth::user()['id'], $rawToken, $rawToken]);
+            header('Location: index.php?route=ticket_validate&token=' . urlencode($rawToken));
+            exit;
+        }
+
+        $tickets = [];
+        if ($rawToken !== '') {
+            $stmt = db()->prepare(
+                'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
+                 FROM tickets
+                 INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
+                 INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
+                 INNER JOIN movies ON movies.id = showtimes.movie_id
+                 INNER JOIN rooms ON rooms.id = showtimes.room_id
+                 WHERE (tickets.qr_token = ? OR tickets.sale_code = ?) AND tickets.status = "vendido"
+                 ORDER BY room_seats.row_label, room_seats.seat_number'
+            );
+            $stmt->execute([$rawToken, $rawToken]);
+            $tickets = $stmt->fetchAll();
+        }
+
+        $first = $tickets[0] ?? null;
+        $alreadyUsed = $first && !empty($first['checked_in_at']);
+        layout('Validação do Ingresso', function () use ($rawToken, $tickets, $first, $alreadyUsed) {
+            ?>
+            <div class="section-head">
+                <div>
+                    <h1>Validação do Ingresso</h1>
+                    <p class="muted">Resultado da leitura do QR Code.</p>
+                </div>
+                <a class="button" href="index.php?route=qr_reader">Ler outro QR</a>
+            </div>
+            <?php if (!$rawToken || !$first): ?>
+                <section class="validation-card invalid">
+                    <strong>Ingresso inválido</strong>
+                    <span>QR Code não encontrado ou venda inexistente.</span>
+                </section>
+            <?php elseif ($alreadyUsed): ?>
+                <section class="validation-card used">
+                    <strong>Ingresso já utilizado</strong>
+                    <span>Entrada registrada em <?= e(date('d/m/Y H:i', strtotime($first['checked_in_at']))) ?>.</span>
+                </section>
+            <?php else: ?>
+                <section class="validation-card valid">
+                    <strong>Ingresso verdadeiro</strong>
+                    <span>Conferido com sucesso. Libere a entrada após confirmar.</span>
+                </section>
+            <?php endif; ?>
+
+            <?php if ($first): ?>
+                <section class="panel validation-detail">
+                    <?php if ($first['has_cover']): ?>
+                        <img src="index.php?route=movie_cover&id=<?= (int) $first['movie_id'] ?>" alt="">
+                    <?php endif; ?>
+                    <div>
+                        <h2><?= e($first['movie_title']) ?></h2>
+                        <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
+                        <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
+                        <p><strong>Poltronas:</strong> <?= e(implode(', ', array_column($tickets, 'seat_code'))) ?></p>
+                        <p><strong>Código:</strong> <?= e($first['sale_code']) ?></p>
+                        <?php if (!$alreadyUsed): ?>
+                            <form method="post">
+                                <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                                <input type="hidden" name="token" value="<?= e($first['qr_token'] ?: $rawToken) ?>">
+                                <button class="button primary">Confirmar entrada</button>
+                            </form>
+                        <?php endif; ?>
+                    </div>
+                </section>
+            <?php endif; ?>
             <?php
         });
         exit;

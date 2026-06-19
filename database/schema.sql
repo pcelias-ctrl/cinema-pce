@@ -102,6 +102,7 @@ CREATE TABLE tickets (
     seller_user_id INT UNSIGNED NOT NULL,
     cash_register_id INT UNSIGNED NULL,
     sale_code VARCHAR(40) NOT NULL,
+    qr_token VARCHAR(80) NULL,
     buyer_name VARCHAR(160) NULL,
     payment_method ENUM('dinheiro', 'cartao', 'pix') NOT NULL,
     unit_price DECIMAL(10,2) NOT NULL,
@@ -110,11 +111,15 @@ CREATE TABLE tickets (
     change_amount DECIMAL(10,2) NULL,
     status ENUM('reservado', 'vendido', 'cancelado') NOT NULL DEFAULT 'vendido',
     sold_at DATETIME NULL,
+    checked_in_at DATETIME NULL,
+    checked_in_by INT UNSIGNED NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uniq_ticket_showtime_seat (showtime_id, room_seat_id),
     INDEX idx_tickets_sale_code (sale_code),
+    INDEX idx_tickets_qr_token (qr_token),
     CONSTRAINT fk_tickets_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id),
     CONSTRAINT fk_tickets_room_seat FOREIGN KEY (room_seat_id) REFERENCES room_seats(id),
     CONSTRAINT fk_tickets_seller FOREIGN KEY (seller_user_id) REFERENCES users(id),
-    CONSTRAINT fk_tickets_cash_register FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id)
+    CONSTRAINT fk_tickets_cash_register FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id),
+    CONSTRAINT fk_tickets_checked_in_by FOREIGN KEY (checked_in_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
