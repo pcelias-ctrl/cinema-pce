@@ -1706,6 +1706,7 @@ try {
                         <strong><?= e($showtime['room_name']) ?></strong>
                         <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(ucfirst($showtime['audio_type'])) ?></span>
                     </div>
+                    <?php if ($showtime['has_cover']): ?><img class="sale-side-cover" src="index.php?route=movie_cover&id=<?= (int) $showtime['movie_id'] ?>" alt="Capa de <?= e($showtime['movie_title']) ?>"><?php endif; ?>
                     <div class="legend">
                         <span><i class="free"></i>Disponível</span>
                         <span><i class="selected"></i>Selecionada</span>
@@ -1714,15 +1715,6 @@ try {
                     <div class="sale-summary">
                         <p class="summary-item">Poltronas <strong id="selected-seats">Nenhuma</strong></p>
                         <p class="summary-item total">Total <strong id="sale-total">R$ 0,00</strong></p>
-                        <label>Forma de pagamento
-                            <select name="payment_method" id="payment-method">
-                                <option value="dinheiro">Dinheiro</option>
-                                <option value="cartao">Cartão</option>
-                                <option value="pix">Pix</option>
-                            </select>
-                        </label>
-                        <label id="amount-paid-row">Valor recebido<input name="amount_paid" id="amount-paid" inputmode="decimal" placeholder="Ex: 50,00"></label>
-                        <p class="summary-item" id="change-row">Troco <strong id="sale-change">R$ 0,00</strong></p>
                     </div>
                     <button class="button primary finish-sale" type="button" id="continue-sale" disabled>Continuar</button>
                 </aside>
@@ -1755,7 +1747,15 @@ try {
                                 <?php if (!$products): ?><p class="muted">Nenhum produto disponível. Cadastre produtos para usar esta etapa.</p><?php endif; ?>
                             </div>
                         </div>
-                        <footer><div><span>Ingressos + produtos</span><strong id="wizard-total">R$ 0,00</strong></div><label id="wizard-paid-row">Valor recebido<input id="wizard-amount-paid" inputmode="decimal" placeholder="Ex: 100,00"></label><button class="button" type="button" id="back-to-seats">Voltar</button><button class="button primary" id="finish-sale">Finalizar venda</button></footer>
+                        <footer>
+                            <div class="wizard-total-block"><span>Ingressos + produtos</span><strong id="wizard-total">R$ 0,00</strong></div>
+                            <div class="wizard-payment">
+                                <label>Forma de pagamento<select name="payment_method" id="payment-method"><option value="dinheiro">Dinheiro</option><option value="cartao">Cartão</option><option value="pix">Pix</option></select></label>
+                                <label id="amount-paid-row">Valor recebido<input name="amount_paid" id="amount-paid" inputmode="decimal" placeholder="Ex: 100,00"></label>
+                                <p class="wizard-change" id="change-row"><span>Troco</span><strong id="sale-change">R$ 0,00</strong></p>
+                            </div>
+                            <button class="button" type="button" id="back-to-seats">Voltar</button><button class="button primary" id="finish-sale">Finalizar venda</button>
+                        </footer>
                     </section>
                 </div>
             </form>

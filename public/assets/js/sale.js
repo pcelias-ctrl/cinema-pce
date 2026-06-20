@@ -13,8 +13,6 @@
     const continueButton = document.getElementById('continue-sale');
     const wizard = document.getElementById('sale-wizard');
     const wizardTotal = document.getElementById('wizard-total');
-    const wizardPaidRow = document.getElementById('wizard-paid-row');
-    const wizardAmountPaid = document.getElementById('wizard-amount-paid');
 
     function parseMoney(value) {
         value = String(value || '').trim();
@@ -69,7 +67,6 @@
         const isCash = method.value === 'dinheiro';
         amountRow.style.display = isCash ? 'grid' : 'none';
         changeRow.style.display = isCash ? 'block' : 'none';
-        wizardPaidRow.style.display = isCash ? 'grid' : 'none';
         const paid = isCash ? parseMoney(amountPaid.value) : total;
         changeLabel.textContent = money(Math.max(0, paid - total));
         const blocked = selected.length === 0 || (isCash && paid < total);
@@ -85,7 +82,6 @@
         });
     });
     continueButton.addEventListener('click', () => {
-        wizardAmountPaid.value = amountPaid.value;
         wizard.hidden = false;
         document.body.classList.add('wizard-open');
         update();
@@ -96,13 +92,6 @@
     }
     document.getElementById('close-wizard').addEventListener('click', closeWizard);
     document.getElementById('back-to-seats').addEventListener('click', closeWizard);
-    wizardAmountPaid.addEventListener('input', () => {
-        amountPaid.value = wizardAmountPaid.value;
-        update();
-    });
-    amountPaid.addEventListener('input', () => {
-        wizardAmountPaid.value = amountPaid.value;
-    });
     form.querySelectorAll('.product-category-tree button').forEach((button) => {
         button.addEventListener('click', () => {
             form.querySelectorAll('.product-category-tree button').forEach((item) => item.classList.toggle('active', item === button));
