@@ -1,10 +1,13 @@
 (function () {
-    const canvas = document.getElementById('ticket-qr');
-    if (!canvas || !window.QRCode) return;
+    const target = document.getElementById('ticket-qr');
+    if (!target || !window.QRCode) return;
 
-    QRCode.toCanvas(canvas, canvas.dataset.url || '', {
+    new QRCode(target, {
+        text: target.dataset.url || '',
         width: 180,
-        margin: 1,
-        errorCorrectionLevel: 'M'
+        height: 180,
+        colorDark: '#171717',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.M
     });
 })();

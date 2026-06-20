@@ -1130,12 +1130,12 @@ try {
                     <p><strong>Troco:</strong> R$ <?= e(number_format((float) $first['change_amount'], 2, ',', '.')) ?></p>
                 <?php endif; ?>
                 <div class="qr-ticket">
-                    <canvas id="ticket-qr" data-url="<?= e($validationUrl) ?>"></canvas>
+                    <div id="ticket-qr" data-url="<?= e($validationUrl) ?>"></div>
                     <p><strong>QR Code:</strong> <?= e($first['qr_token'] ?: $first['sale_code']) ?></p>
                 </div>
                 <p class="muted">Apresente este ingresso na entrada.</p>
             </section>
-            <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+            <script src="assets/js/vendor/qrcode.min.js"></script>
             <script src="assets/js/ticket-qr.js"></script>
             <?php
         });
