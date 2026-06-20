@@ -32,12 +32,19 @@ function layout(string $title, callable $content): void
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?= e($title) ?> - <?= e(config_value('app_name')) ?></title>
+        <link rel="stylesheet" href="assets/vendor/adminlte/css/adminlte.min.css">
         <link rel="stylesheet" href="assets/css/app.css">
     </head>
-    <body class="<?= $user ? 'app-shell' : 'public-shell' ?>">
+    <body class="layout-fixed sidebar-expand-lg bg-body-tertiary <?= $user ? 'app-shell' : 'public-shell' ?>">
+      <div class="app-wrapper">
         <?php if ($user): ?>
-            <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Abrir menu" title="Abrir menu">☰</button>
-            <aside class="sidebar" id="sidebar">
+            <nav class="app-header navbar navbar-expand bg-body">
+                <div class="container-fluid">
+                    <a class="nav-link sidebar-toggle" data-lte-toggle="sidebar" href="#" role="button" aria-label="Alternar menu" title="Alternar menu">☰</a>
+                    <span class="navbar-text ms-auto"><?= e($user['name']) ?></span>
+                </div>
+            </nav>
+            <aside class="app-sidebar sidebar bg-body-secondary shadow" data-bs-theme="dark">
                 <div class="sidebar-brand">
                     <a class="brand" href="index.php">Cinema PCE</a>
                     <span>Gestão & Bilheteria</span>
@@ -46,42 +53,40 @@ function layout(string $title, callable $content): void
                     <span><?= $user['role'] === 'administrador' ? 'Administrador' : 'Operador' ?></span>
                     <strong><?= e($user['name']) ?></strong>
                 </div>
-                <nav>
-                    <?php if ($user['role'] === 'administrador'): ?>
-                        <span class="nav-label">Gestão</span>
-                        <a class="<?= $navClass('dashboard') ?>" href="index.php"><i></i>Painel</a>
-                        <a class="<?= $navClass('movies') ?>" href="index.php?route=movies"><i></i>Filmes</a>
-                        <a class="<?= $navClass('rooms') ?>" href="index.php?route=rooms"><i></i>Salas</a>
-                        <a class="<?= $navClass('showtimes') ?>" href="index.php?route=showtimes"><i></i>Sessões</a>
-                    <?php endif; ?>
-                    <span class="nav-label">Operação</span>
-                    <a class="<?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i>Venda</a>
-                    <a class="<?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i>Caixa</a>
-                    <a class="<?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i>Leitor QR</a>
-                    <?php if ($user['role'] === 'administrador'): ?>
-                        <a class="<?= $navClass('users') ?>" href="index.php?route=users"><i></i>Usuários</a>
-                    <?php endif; ?>
-                    <a class="logout-link" href="index.php?route=logout"><i></i>Sair</a>
-                </nav>
+                <div class="sidebar-wrapper">
+                    <nav class="mt-2" aria-label="Navegação principal">
+                        <ul class="nav sidebar-menu flex-column" data-lte-toggle="treeview" data-accordion="false">
+                            <?php if ($user['role'] === 'administrador'): ?>
+                                <li class="nav-header">GESTÃO</li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('dashboard') ?>" href="index.php"><i></i><p>Painel</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('movies') ?>" href="index.php?route=movies"><i></i><p>Filmes</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('rooms') ?>" href="index.php?route=rooms"><i></i><p>Salas</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('showtimes') ?>" href="index.php?route=showtimes"><i></i><p>Sessões</p></a></li>
+                            <?php endif; ?>
+                            <li class="nav-header">OPERAÇÃO</li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Leitor QR</p></a></li>
+                            <?php if ($user['role'] === 'administrador'): ?>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('users') ?>" href="index.php?route=users"><i></i><p>Usuários</p></a></li>
+                            <?php endif; ?>
+                            <li class="nav-item logout-link"><a class="nav-link" href="index.php?route=logout"><i></i><p>Sair</p></a></li>
+                        </ul>
+                    </nav>
+                </div>
             </aside>
-            <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="Fechar menu"></button>
         <?php else: ?>
             <header class="public-topbar"><a class="brand" href="index.php">Cinema PCE</a></header>
         <?php endif; ?>
-        <main class="page">
-            <?php $content(); ?>
+        <main class="<?= $user ? 'app-main' : '' ?>">
+          <div class="<?= $user ? 'app-content' : '' ?>">
+            <div class="container-fluid page">
+                <?php $content(); ?>
+            </div>
+          </div>
         </main>
-        <?php if ($user): ?>
-            <script>
-                (() => {
-                    const toggle = document.getElementById('sidebar-toggle');
-                    const backdrop = document.getElementById('sidebar-backdrop');
-                    const close = () => document.body.classList.remove('sidebar-open');
-                    toggle.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
-                    backdrop.addEventListener('click', close);
-                })();
-            </script>
-        <?php endif; ?>
+        <script src="assets/vendor/adminlte/js/adminlte.min.js"></script>
+      </div>
     </body>
     </html>
     <?php
