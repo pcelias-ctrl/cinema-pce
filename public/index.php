@@ -148,6 +148,24 @@ function save_cinema_logo(array $file): ?array
     return ['mime' => $info['mime'], 'data' => $data];
 }
 
+function save_product_image(array $file): ?array
+{
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('Falha no upload da foto do produto.');
+    }
+    if (($file['size'] ?? 0) > 3 * 1024 * 1024) {
+        throw new RuntimeException('A foto do produto deve ter no máximo 3 MB.');
+    }
+    $info = getimagesize($file['tmp_name']);
+    if (!$info || !in_array($info['mime'], ['image/jpeg', 'image/png', 'image/webp'], true)) {
+        throw new RuntimeException('A foto precisa ser JPG, PNG ou WEBP.');
+    }
+    $data = file_get_contents($file['tmp_name']);
+    if ($data === false) throw new RuntimeException('Não foi possível ler a foto enviada.');
+    return ['mime' => $info['mime'], 'data' => $data];
+}
+
 function rebuild_room_seats(int $roomId, array $seats): void
 {
     $pdo = db();
@@ -426,6 +444,7 @@ function ensure_product_tables(): void
 {
     static $ready = false;
     if ($ready) return;
+    $categoryTableExists = (bool) db()->query("SHOW TABLES LIKE 'product_categories'")->fetch();
     db()->exec("CREATE TABLE IF NOT EXISTS product_categories (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, parent_id INT UNSIGNED NULL, name VARCHAR(120) NOT NULL,
         icon VARCHAR(50) NOT NULL DEFAULT 'package', sort_order SMALLINT NOT NULL DEFAULT 0, active TINYINT(1) NOT NULL DEFAULT 1,
@@ -434,10 +453,15 @@ function ensure_product_tables(): void
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
     db()->exec("CREATE TABLE IF NOT EXISTS products (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, category_id INT UNSIGNED NOT NULL, name VARCHAR(160) NOT NULL,
-        sku VARCHAR(60) NULL UNIQUE, price DECIMAL(10,2) NOT NULL, stock_quantity INT NULL, active TINYINT(1) NOT NULL DEFAULT 1,
+        sku VARCHAR(60) NULL UNIQUE, price DECIMAL(10,2) NOT NULL, stock_quantity INT NULL,
+        image_mime VARCHAR(80) NULL, image_data LONGBLOB NULL, active TINYINT(1) NOT NULL DEFAULT 1,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_products_category_active (category_id, active), CONSTRAINT fk_products_category FOREIGN KEY (category_id) REFERENCES product_categories(id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $imageColumn = db()->query("SHOW COLUMNS FROM products LIKE 'image_mime'")->fetch();
+    if (!$imageColumn) {
+        db()->exec('ALTER TABLE products ADD COLUMN image_mime VARCHAR(80) NULL AFTER stock_quantity, ADD COLUMN image_data LONGBLOB NULL AFTER image_mime');
+    }
     db()->exec("CREATE TABLE IF NOT EXISTS product_sales (
         id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, sale_code VARCHAR(40) NOT NULL, seller_user_id INT UNSIGNED NOT NULL,
         cash_register_id INT UNSIGNED NULL, payment_method ENUM('dinheiro','cartao','pix') NOT NULL, total_amount DECIMAL(10,2) NOT NULL,
@@ -454,8 +478,7 @@ function ensure_product_tables(): void
         CONSTRAINT fk_product_items_product FOREIGN KEY (product_id) REFERENCES products(id),
         CONSTRAINT fk_product_items_delivered_by FOREIGN KEY (delivered_by) REFERENCES users(id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-    $count = (int) db()->query('SELECT COUNT(*) FROM product_categories')->fetchColumn();
-    if ($count === 0) {
+    if (!$categoryTableExists) {
         $seed = db()->prepare('INSERT INTO product_categories (name, icon, sort_order) VALUES (?, ?, ?)');
         foreach ([['Pipocas', 'popcorn', 10], ['Bebidas', 'cup-soda', 20], ['Doces', 'candy', 30], ['Chocolates', 'cookie', 40]] as $category) $seed->execute($category);
     }
@@ -675,6 +698,21 @@ try {
         exit;
     }
 
+    if ($route === 'product_image') {
+        ensure_product_tables();
+        $stmt = db()->prepare('SELECT image_mime, image_data FROM products WHERE id = ? AND image_data IS NOT NULL LIMIT 1');
+        $stmt->execute([(int) ($_GET['id'] ?? 0)]);
+        $image = $stmt->fetch();
+        if (!$image) {
+            http_response_code(404);
+            exit;
+        }
+        header('Content-Type: ' . $image['image_mime']);
+        header('Cache-Control: private, max-age=86400');
+        echo $image['image_data'];
+        exit;
+    }
+
     if ($route === 'users') {
         Auth::requireAdmin();
         $formError = '';
@@ -811,6 +849,14 @@ try {
                 $id = (int) ($_POST['id'] ?? 0);
                 if ($action === 'toggle') {
                     db()->prepare('UPDATE product_categories SET active = NOT active WHERE id = ?')->execute([$id]);
+                } elseif ($action === 'delete') {
+                    $check = db()->prepare('SELECT (SELECT COUNT(*) FROM products WHERE category_id = ?) product_count, (SELECT COUNT(*) FROM product_categories WHERE parent_id = ?) child_count');
+                    $check->execute([$id, $id]);
+                    $usage = $check->fetch();
+                    if (!$usage) throw new RuntimeException('Categoria não encontrada.');
+                    if ((int) $usage['product_count'] > 0) throw new RuntimeException('Esta categoria possui produtos. Exclua ou mova os produtos primeiro.');
+                    if ((int) $usage['child_count'] > 0) throw new RuntimeException('Esta categoria possui subcategorias. Exclua ou mova as subcategorias primeiro.');
+                    db()->prepare('DELETE FROM product_categories WHERE id = ?')->execute([$id]);
                 } else {
                     $name = trim($_POST['name'] ?? '');
                     if ($name === '') throw new RuntimeException('Informe o nome da categoria.');
@@ -824,7 +870,7 @@ try {
                 redirect_to('product_categories');
             } catch (Throwable $exception) { $error = $exception->getMessage(); }
         }
-        $categories = db()->query('SELECT c.*, p.name parent_name FROM product_categories c LEFT JOIN product_categories p ON p.id=c.parent_id ORDER BY COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.sort_order, c.name')->fetchAll();
+        $categories = db()->query('SELECT c.*, p.name parent_name,(SELECT COUNT(*) FROM products WHERE category_id=c.id) product_count,(SELECT COUNT(*) FROM product_categories children WHERE children.parent_id=c.id) child_count FROM product_categories c LEFT JOIN product_categories p ON p.id=c.parent_id ORDER BY COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.sort_order, c.name')->fetchAll();
         $edit = null;
         if ((int) ($_GET['edit_id'] ?? 0) > 0) { $s=db()->prepare('SELECT * FROM product_categories WHERE id=?'); $s->execute([(int)$_GET['edit_id']]); $edit=$s->fetch(); }
         layout('Categorias de Produtos', function () use ($categories, $edit, $error) { ?>
@@ -836,7 +882,7 @@ try {
                 <label>Ícone<select name="icon"><?php foreach(['package'=>'Pacote','popcorn'=>'Pipoca','cup-soda'=>'Bebida','candy'=>'Doce','cookie'=>'Chocolate','glass-water'=>'Água','ice-cream-bowl'=>'Sorvete','sandwich'=>'Lanche'] as $icon=>$label):?><option value="<?=e($icon)?>" <?=($edit['icon']??'package')===$icon?'selected':''?>><?=e($label)?></option><?php endforeach;?></select></label>
                 <label>Ordem<input name="sort_order" type="number" value="<?=e($edit['sort_order']??0)?>"></label>
                 <div class="toolbar"><button class="button primary">Salvar</button><?php if($edit):?><a class="button" href="index.php?route=product_categories">Cancelar</a><?php endif;?></div>
-            </form><div class="panel"><table><thead><tr><th>Categoria</th><th>Pai</th><th>Status</th><th>Ações</th></tr></thead><tbody><?php foreach($categories as $category):?><tr><td><span class="category-name"><i data-lucide="<?=e($category['icon'])?>"></i><strong><?=e($category['name'])?></strong></span></td><td><?=e($category['parent_name']??'-')?></td><td><span class="status-badge <?=$category['active']?'active':'inactive'?>"><?=$category['active']?'Ativa':'Inativa'?></span></td><td><div class="table-actions"><a class="button" href="index.php?route=product_categories&edit_id=<?=(int)$category['id']?>">Editar</a><form method="post"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?=(int)$category['id']?>"><button class="button <?=$category['active']?'danger':'primary'?>"><?=$category['active']?'Desativar':'Ativar'?></button></form></div></td></tr><?php endforeach;?></tbody></table></div></section>
+            </form><div class="panel"><table><thead><tr><th>Categoria</th><th>Pai</th><th>Status</th><th>Ações</th></tr></thead><tbody><?php foreach($categories as $category):?><tr><td><span class="category-name"><i data-lucide="<?=e($category['icon'])?>"></i><strong><?=e($category['name'])?></strong></span></td><td><?=e($category['parent_name']??'-')?></td><td><span class="status-badge <?=$category['active']?'active':'inactive'?>"><?=$category['active']?'Ativa':'Inativa'?></span></td><td><div class="table-actions"><a class="button" href="index.php?route=product_categories&edit_id=<?=(int)$category['id']?>">Editar</a><form method="post"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?=(int)$category['id']?>"><button class="button <?=$category['active']?'danger':'primary'?>"><?=$category['active']?'Desativar':'Ativar'?></button></form><?php if((int)$category['product_count']===0&&(int)$category['child_count']===0):?><form method="post" onsubmit="return confirm('Excluir esta categoria?')"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?=(int)$category['id']?>"><button class="button danger">Excluir</button></form><?php endif;?></div></td></tr><?php endforeach;?></tbody></table></div></section>
         <?php }); exit;
     }
 
@@ -846,17 +892,48 @@ try {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
             try {
-                $action=$_POST['action']??'save'; $id=(int)($_POST['id']??0);
-                if($action==='toggle') db()->prepare('UPDATE products SET active=NOT active WHERE id=?')->execute([$id]);
-                else { $name=trim($_POST['name']??''); $categoryId=(int)($_POST['category_id']??0); $price=money_to_decimal($_POST['price']??'0'); if($name===''||$categoryId<1||$price<=0)throw new RuntimeException('Informe categoria, nome e preço válido.'); $sku=trim($_POST['sku']??'')?:null; $stock=trim($_POST['stock_quantity']??'')===''?null:max(0,(int)$_POST['stock_quantity']); $values=[$categoryId,$name,$sku,$price,$stock]; if($id>0)db()->prepare('UPDATE products SET category_id=?,name=?,sku=?,price=?,stock_quantity=? WHERE id=?')->execute(array_merge($values,[$id])); else db()->prepare('INSERT INTO products(category_id,name,sku,price,stock_quantity) VALUES(?,?,?,?,?)')->execute($values); }
+                $action = $_POST['action'] ?? 'save';
+                $id = (int) ($_POST['id'] ?? 0);
+                if ($action === 'toggle') {
+                    db()->prepare('UPDATE products SET active = NOT active WHERE id = ?')->execute([$id]);
+                } elseif ($action === 'delete') {
+                    $check = db()->prepare('SELECT COUNT(*) FROM product_sale_items WHERE product_id = ?');
+                    $check->execute([$id]);
+                    if ((int) $check->fetchColumn() > 0) throw new RuntimeException('Este produto possui vendas e não pode ser excluído. Desative-o para preservar o histórico.');
+                    db()->prepare('DELETE FROM products WHERE id = ?')->execute([$id]);
+                } else {
+                    $name = trim($_POST['name'] ?? '');
+                    $categoryId = (int) ($_POST['category_id'] ?? 0);
+                    $price = money_to_decimal($_POST['price'] ?? '0');
+                    if ($name === '' || $categoryId < 1 || $price <= 0) throw new RuntimeException('Informe categoria, nome e preço válido.');
+                    $sku = trim($_POST['sku'] ?? '') ?: null;
+                    $stock = trim($_POST['stock_quantity'] ?? '') === '' ? null : max(0, (int) $_POST['stock_quantity']);
+                    $image = save_product_image($_FILES['image'] ?? []);
+                    if ($id > 0) {
+                        $sql = 'UPDATE products SET category_id=?, name=?, sku=?, price=?, stock_quantity=?';
+                        $params = [$categoryId, $name, $sku, $price, $stock];
+                        if ($image) {
+                            $sql .= ', image_mime=?, image_data=?';
+                            $params[] = $image['mime'];
+                            $params[] = $image['data'];
+                        } elseif (!empty($_POST['remove_image'])) {
+                            $sql .= ', image_mime=NULL, image_data=NULL';
+                        }
+                        $sql .= ' WHERE id=?';
+                        $params[] = $id;
+                        db()->prepare($sql)->execute($params);
+                    } else {
+                        db()->prepare('INSERT INTO products(category_id,name,sku,price,stock_quantity,image_mime,image_data) VALUES(?,?,?,?,?,?,?)')->execute([$categoryId, $name, $sku, $price, $stock, $image['mime'] ?? null, $image['data'] ?? null]);
+                    }
+                }
                 redirect_to('products');
-            } catch(Throwable $exception){$error=$exception->getCode()==='23000'?'O SKU informado já está cadastrado.':$exception->getMessage();}
+            } catch(Throwable $exception){$error=(string)$exception->getCode()==='23000'?'O SKU informado já está cadastrado ou o registro está em uso.':$exception->getMessage();}
         }
         $categories=db()->query('SELECT id,name FROM product_categories WHERE active=1 ORDER BY sort_order,name')->fetchAll();
-        $products=db()->query('SELECT products.*,product_categories.name category_name,product_categories.icon category_icon FROM products INNER JOIN product_categories ON product_categories.id=products.category_id ORDER BY product_categories.sort_order,products.name')->fetchAll();
-        $edit=null;if((int)($_GET['edit_id']??0)>0){$s=db()->prepare('SELECT * FROM products WHERE id=?');$s->execute([(int)$_GET['edit_id']]);$edit=$s->fetch();}
+        $products=db()->query('SELECT products.id,products.category_id,products.name,products.sku,products.price,products.stock_quantity,products.active,products.image_data IS NOT NULL has_image,product_categories.name category_name,product_categories.icon category_icon,(SELECT COUNT(*) FROM product_sale_items WHERE product_id=products.id) usage_count FROM products INNER JOIN product_categories ON product_categories.id=products.category_id ORDER BY product_categories.sort_order,products.name')->fetchAll();
+        $edit=null;if((int)($_GET['edit_id']??0)>0){$s=db()->prepare('SELECT id,category_id,name,sku,price,stock_quantity,active,image_data IS NOT NULL has_image FROM products WHERE id=?');$s->execute([(int)$_GET['edit_id']]);$edit=$s->fetch();}
         layout('Produtos', function()use($categories,$products,$edit,$error){?>
-            <div class="section-head"><div><h1>Produtos</h1><p class="muted">Itens vendidos junto aos ingressos.</p></div></div><section class="split"><form method="post" class="panel form"><h2><?=$edit?'Editar produto':'Novo produto'?></h2><?php if($error):?><p class="alert"><?=e($error)?></p><?php endif;?><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?=(int)($edit['id']??0)?>"><label>Categoria<select name="category_id" required><option value="">Selecione</option><?php foreach($categories as $category):?><option value="<?=(int)$category['id']?>" <?= (int)($edit['category_id']??0)===(int)$category['id']?'selected':''?>><?=e($category['name'])?></option><?php endforeach;?></select></label><label>Nome<input name="name" value="<?=e($edit['name']??'')?>" required></label><label>SKU<input name="sku" value="<?=e($edit['sku']??'')?>" placeholder="Opcional"></label><label>Preço<input name="price" inputmode="decimal" value="<?=isset($edit['price'])?e(number_format((float)$edit['price'],2,',','.')):''?>" required></label><label>Estoque<input name="stock_quantity" type="number" min="0" value="<?=e($edit['stock_quantity']??'')?>" placeholder="Vazio = sem controle"></label><div class="toolbar"><button class="button primary">Salvar</button><?php if($edit):?><a class="button" href="index.php?route=products">Cancelar</a><?php endif;?></div></form><div class="panel"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Estoque</th><th>Status</th><th>Ações</th></tr></thead><tbody><?php foreach($products as $product):?><tr><td><strong><?=e($product['name'])?></strong><small><?=e($product['sku']??'')?></small></td><td><span class="category-name"><i data-lucide="<?=e($product['category_icon'])?>"></i><?=e($product['category_name'])?></span></td><td>R$ <?=e(number_format((float)$product['price'],2,',','.'))?></td><td><?=$product['stock_quantity']===null?'Livre':(int)$product['stock_quantity']?></td><td><span class="status-badge <?=$product['active']?'active':'inactive'?>"><?=$product['active']?'Ativo':'Inativo'?></span></td><td><div class="table-actions"><a class="button" href="index.php?route=products&edit_id=<?=(int)$product['id']?>">Editar</a><form method="post"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?=(int)$product['id']?>"><button class="button <?=$product['active']?'danger':'primary'?>"><?=$product['active']?'Desativar':'Ativar'?></button></form></div></td></tr><?php endforeach;?></tbody></table></div></section>
+            <div class="section-head"><div><h1>Produtos</h1><p class="muted">Itens vendidos junto aos ingressos.</p></div></div><section class="split"><form method="post" enctype="multipart/form-data" class="panel form"><h2><?=$edit?'Editar produto':'Novo produto'?></h2><?php if($error):?><p class="alert"><?=e($error)?></p><?php endif;?><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?=(int)($edit['id']??0)?>"><label>Categoria<select name="category_id" required><option value="">Selecione</option><?php foreach($categories as $category):?><option value="<?=(int)$category['id']?>" <?= (int)($edit['category_id']??0)===(int)$category['id']?'selected':''?>><?=e($category['name'])?></option><?php endforeach;?></select></label><label>Nome<input name="name" value="<?=e($edit['name']??'')?>" required></label><label>SKU<input name="sku" value="<?=e($edit['sku']??'')?>" placeholder="Opcional"></label><label>Preço<input name="price" inputmode="decimal" value="<?=isset($edit['price'])?e(number_format((float)$edit['price'],2,',','.')):''?>" required></label><label>Estoque<input name="stock_quantity" type="number" min="0" value="<?=e($edit['stock_quantity']??'')?>" placeholder="Vazio = sem controle"></label><label>Foto do produto<input name="image" type="file" accept="image/jpeg,image/png,image/webp"><small>JPG, PNG ou WEBP, até 3 MB. Salva no banco de dados.</small></label><?php if(!empty($edit['has_image'])):?><div class="product-image-current"><img src="index.php?route=product_image&id=<?=(int)$edit['id']?>" alt="Foto atual"><label class="check-label"><input type="checkbox" name="remove_image" value="1"> Remover foto atual</label></div><?php endif;?><div class="toolbar"><button class="button primary">Salvar</button><?php if($edit):?><a class="button" href="index.php?route=products">Cancelar</a><?php endif;?></div></form><div class="panel"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Estoque</th><th>Status</th><th>Ações</th></tr></thead><tbody><?php foreach($products as $product):?><tr><td><div class="product-table-name"><?php if($product['has_image']):?><img src="index.php?route=product_image&id=<?=(int)$product['id']?>" alt=""><?php else:?><span class="product-image-placeholder"><i data-lucide="package"></i></span><?php endif;?><div><strong><?=e($product['name'])?></strong><small><?=e($product['sku']??'')?></small></div></div></td><td><span class="category-name"><i data-lucide="<?=e($product['category_icon'])?>"></i><?=e($product['category_name'])?></span></td><td>R$ <?=e(number_format((float)$product['price'],2,',','.'))?></td><td><?=$product['stock_quantity']===null?'Livre':(int)$product['stock_quantity']?></td><td><span class="status-badge <?=$product['active']?'active':'inactive'?>"><?=$product['active']?'Ativo':'Inativo'?></span></td><td><div class="table-actions"><a class="button" href="index.php?route=products&edit_id=<?=(int)$product['id']?>">Editar</a><form method="post"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?=(int)$product['id']?>"><button class="button <?=$product['active']?'danger':'primary'?>"><?=$product['active']?'Desativar':'Ativar'?></button></form><?php if((int)$product['usage_count']===0):?><form method="post" onsubmit="return confirm('Excluir este produto?')"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?=(int)$product['id']?>"><button class="button danger">Excluir</button></form><?php endif;?></div></td></tr><?php endforeach;?></tbody></table></div></section>
         <?php });exit;
     }
 
@@ -1598,7 +1675,7 @@ try {
         $seatsStmt->execute([$showtimeId, (int) $showtime['room_id']]);
         $seats = $seatsStmt->fetchAll();
         $productCategories = db()->query('SELECT * FROM product_categories WHERE active=1 ORDER BY COALESCE(parent_id,id), parent_id IS NOT NULL, sort_order, name')->fetchAll();
-        $products = db()->query('SELECT products.*, product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY product_categories.sort_order, products.name')->fetchAll();
+        $products = db()->query('SELECT products.id,products.category_id,products.name,products.price,products.stock_quantity,products.image_data IS NOT NULL has_image,product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY product_categories.sort_order, products.name')->fetchAll();
         $screen = json_decode($showtime['screen_config'] ?: '{}', true) ?: ['x' => 270, 'y' => 28, 'w' => 500, 'h' => 34];
 
         layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products) {
@@ -1670,6 +1747,7 @@ try {
                             <div class="product-picker">
                                 <?php foreach ($products as $product): ?>
                                     <article class="product-pick-card" data-category="<?= (int) $product['category_id'] ?>" data-price="<?= e($product['price']) ?>">
+                                        <?php if ($product['has_image']): ?><img class="product-pick-image" src="index.php?route=product_image&id=<?= (int) $product['id'] ?>" alt=""><?php else: ?><span class="product-pick-image placeholder"><i data-lucide="package"></i></span><?php endif; ?>
                                         <div><strong><?= e($product['name']) ?></strong><span><?= e($product['category_name']) ?></span><b>R$ <?= e(number_format((float) $product['price'], 2, ',', '.')) ?></b></div>
                                         <div class="quantity-stepper"><button type="button" data-delta="-1" aria-label="Diminuir">−</button><input name="product_qty[<?= (int) $product['id'] ?>]" type="number" min="0" max="20" value="0" readonly><button type="button" data-delta="1" aria-label="Adicionar">+</button></div>
                                     </article>
@@ -1827,7 +1905,7 @@ try {
         header('Content-Type: application/json; charset=utf-8');
         $token = trim($_GET['token'] ?? '');
         if (str_contains($token, 'product_pickup_lookup')) { $parts=parse_url($token);parse_str($parts['query']??'',$query);$token=trim($query['token']??''); }
-        $stmt=db()->prepare('SELECT product_sale_items.id,product_sale_items.qr_token,product_sale_items.status,product_sale_items.delivered_at,products.name product_name,product_categories.name category_name,product_sales.sale_code FROM product_sale_items INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id WHERE product_sale_items.qr_token=? LIMIT 1');
+        $stmt=db()->prepare('SELECT product_sale_items.id,product_sale_items.qr_token,product_sale_items.status,product_sale_items.delivered_at,products.id product_id,products.name product_name,products.image_data IS NOT NULL has_image,product_categories.name category_name,product_sales.sale_code FROM product_sale_items INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id WHERE product_sale_items.qr_token=? LIMIT 1');
         $stmt->execute([$token]);$item=$stmt->fetch();
         if(!$item){http_response_code(404);echo json_encode(['ok'=>false,'message'=>'Produto não encontrado.']);exit;}
         echo json_encode(['ok'=>true,'item'=>$item],JSON_UNESCAPED_UNICODE);exit;

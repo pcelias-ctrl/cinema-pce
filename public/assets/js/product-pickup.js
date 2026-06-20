@@ -23,7 +23,8 @@
         list.innerHTML = '';
         items.forEach((item) => {
             const row = document.createElement('article');
-            row.innerHTML = `<div><strong>${escapeHtml(item.product_name)}</strong><span>${escapeHtml(item.category_name)} | Venda ${escapeHtml(item.sale_code)}</span></div><button type="button" title="Remover">×</button><input type="hidden" name="item_ids[]" value="${Number(item.id)}">`;
+            const image = item.has_image ? `<img src="index.php?route=product_image&id=${Number(item.product_id)}" alt="">` : '<span class="pickup-image-placeholder">+</span>';
+            row.innerHTML = `${image}<div><strong>${escapeHtml(item.product_name)}</strong><span>${escapeHtml(item.category_name)} | Venda ${escapeHtml(item.sale_code)}</span></div><button type="button" title="Remover">×</button><input type="hidden" name="item_ids[]" value="${Number(item.id)}">`;
             row.querySelector('button').onclick = () => { items.delete(String(item.id)); render(); };
             list.appendChild(row);
         });
