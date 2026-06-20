@@ -145,28 +145,58 @@ function save_cinema_logo(array $file): ?array
 function rebuild_room_seats(int $roomId, array $seats): void
 {
     $pdo = db();
-    $pdo->prepare('DELETE FROM room_seats WHERE room_id = ?')->execute([$roomId]);
-    $stmt = $pdo->prepare(
+    $existingStmt = $pdo->prepare('SELECT * FROM room_seats WHERE room_id = ?');
+    $existingStmt->execute([$roomId]);
+    $existingByCode = [];
+    foreach ($existingStmt->fetchAll() as $existingSeat) {
+        $existingByCode[$existingSeat['seat_code']] = $existingSeat;
+    }
+
+    $insert = $pdo->prepare(
         'INSERT INTO room_seats (room_id, row_label, seat_number, seat_code, seat_type, pos_x, pos_y, width, height)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
+    $update = $pdo->prepare(
+        'UPDATE room_seats SET row_label=?, seat_number=?, seat_type=?, pos_x=?, pos_y=?, width=?, height=? WHERE id=? AND room_id=?'
+    );
+    $submittedCodes = [];
 
     foreach ($seats as $seat) {
         $row = preg_replace('/[^A-Z0-9]/i', '', (string) ($seat['row'] ?? 'A')) ?: 'A';
+        $row = strtoupper($row);
         $number = max(1, (int) ($seat['number'] ?? 1));
+        $code = $row . $number;
+        if (isset($submittedCodes[$code])) {
+            throw new RuntimeException('A poltrona ' . $code . ' está duplicada no mapa da sala.');
+        }
+        $submittedCodes[$code] = true;
         $type = ($seat['type'] ?? 'normal') === 'grande' ? 'grande' : 'normal';
-        $stmt->execute([
-            $roomId,
-            strtoupper($row),
-            $number,
-            strtoupper($row) . $number,
-            $type,
-            (float) ($seat['x'] ?? 0),
-            (float) ($seat['y'] ?? 0),
-            (float) ($seat['w'] ?? ($type === 'grande' ? 62 : 44)),
-            (float) ($seat['h'] ?? 44),
-        ]);
+        $values = [
+            $row, $number, $type,
+            (float) ($seat['x'] ?? 0), (float) ($seat['y'] ?? 0),
+            (float) ($seat['w'] ?? ($type === 'grande' ? 62 : 44)), (float) ($seat['h'] ?? 44),
+        ];
+        if (isset($existingByCode[$code])) {
+            $update->execute(array_merge($values, [(int) $existingByCode[$code]['id'], $roomId]));
+        } else {
+            $insert->execute([$roomId, $row, $number, $code, $type, $values[3], $values[4], $values[5], $values[6]]);
+        }
     }
+
+    $obsolete = array_filter($existingByCode, static fn($seat, $code) => !isset($submittedCodes[$code]), ARRAY_FILTER_USE_BOTH);
+    if (!$obsolete) return;
+
+    $obsoleteIds = array_map(static fn($seat) => (int) $seat['id'], array_values($obsolete));
+    $placeholders = implode(',', array_fill(0, count($obsoleteIds), '?'));
+    $usedStmt = $pdo->prepare("SELECT room_seat_id FROM tickets WHERE room_seat_id IN ($placeholders) LIMIT 1");
+    $usedStmt->execute($obsoleteIds);
+    $usedSeatId = $usedStmt->fetchColumn();
+    if ($usedSeatId) {
+        $usedCode = array_search((int) $usedSeatId, array_map(static fn($seat) => (int) $seat['id'], $obsolete), true);
+        throw new RuntimeException('Não é possível remover a poltrona ' . ($usedCode ?: '') . ' porque ela possui ingressos vinculados. Mantenha a poltrona no mapa.');
+    }
+    $delete = $pdo->prepare("DELETE FROM room_seats WHERE room_id = ? AND id IN ($placeholders)");
+    $delete->execute(array_merge([$roomId], $obsoleteIds));
 }
 
 function technical_sheet_from_post(): ?string
@@ -1685,17 +1715,22 @@ try {
             }
 
             db()->beginTransaction();
-            if ($route === 'room_new') {
-                $stmt = db()->prepare('INSERT INTO rooms (name, capacity, normal_seats, large_seats, screen_config, seat_layout) VALUES (?, ?, ?, ?, ?, ?)');
-                $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], json_encode($screen), json_encode($layout)]);
-                $roomId = (int) db()->lastInsertId();
-            } else {
-                $roomId = (int) $_GET['id'];
-                $stmt = db()->prepare('UPDATE rooms SET name=?, capacity=?, normal_seats=?, large_seats=?, screen_config=?, seat_layout=? WHERE id=?');
-                $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], json_encode($screen), json_encode($layout), $roomId]);
+            try {
+                if ($route === 'room_new') {
+                    $stmt = db()->prepare('INSERT INTO rooms (name, capacity, normal_seats, large_seats, screen_config, seat_layout) VALUES (?, ?, ?, ?, ?, ?)');
+                    $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], json_encode($screen), json_encode($layout)]);
+                    $roomId = (int) db()->lastInsertId();
+                } else {
+                    $roomId = (int) $_GET['id'];
+                    $stmt = db()->prepare('UPDATE rooms SET name=?, capacity=?, normal_seats=?, large_seats=?, screen_config=?, seat_layout=? WHERE id=?');
+                    $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], json_encode($screen), json_encode($layout), $roomId]);
+                }
+                rebuild_room_seats($roomId, $layout);
+                db()->commit();
+            } catch (Throwable $exception) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $exception;
             }
-            rebuild_room_seats($roomId, $layout);
-            db()->commit();
             redirect_to('rooms');
         }
 
