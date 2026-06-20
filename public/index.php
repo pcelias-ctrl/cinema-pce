@@ -1729,44 +1729,43 @@ try {
     $occupancyStmt->execute([$dashboardDate]);
     $sessionRows = $occupancyStmt->fetchAll();
 
-    $hourStmt = db()->prepare(
-        "SELECT HOUR(showtimes.starts_at) hour_label,
-            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) tickets
-         FROM showtimes
-         LEFT JOIN tickets ON tickets.showtime_id = showtimes.id
-         WHERE DATE(showtimes.starts_at) = ?
-         GROUP BY HOUR(showtimes.starts_at)
-         ORDER BY hour_label ASC"
+    $cashSummaryStmt = db()->prepare(
+        "SELECT COUNT(*) registers, COALESCE(SUM(opening_amount), 0) opening_total,
+            SUM(CASE WHEN status = 'aberto' THEN 1 ELSE 0 END) open_registers
+         FROM cash_registers WHERE DATE(opened_at) = ?"
     );
-    $hourStmt->execute([$dashboardDate]);
-    $hourRows = $hourStmt->fetchAll();
-    $maxHourTickets = max(1, ...array_map(static fn($row) => (int) $row['tickets'], $hourRows ?: [['tickets' => 1]]));
+    $cashSummaryStmt->execute([$dashboardDate]);
+    $cashSummary = $cashSummaryStmt->fetch();
 
-    $roomStmt = db()->prepare(
-        "SELECT rooms.name room_name,
-            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) tickets,
-            COUNT(CASE WHEN tickets.status = 'vendido' AND tickets.checked_in_at IS NOT NULL THEN tickets.id END) checked_in,
-            COALESCE(SUM(CASE WHEN tickets.status = 'vendido' THEN tickets.unit_price ELSE 0 END), 0) revenue
-         FROM showtimes
-         INNER JOIN rooms ON rooms.id = showtimes.room_id
-         LEFT JOIN tickets ON tickets.showtime_id = showtimes.id
-         WHERE DATE(showtimes.starts_at) = ?
-         GROUP BY rooms.id, rooms.name
-         ORDER BY rooms.name ASC"
+    $paymentStmt = db()->prepare(
+        "SELECT
+            COALESCE(SUM(CASE WHEN payment_method = 'dinheiro' AND status = 'vendido' THEN unit_price ELSE 0 END), 0) cash_total,
+            COALESCE(SUM(CASE WHEN payment_method = 'cartao' AND status = 'vendido' THEN unit_price ELSE 0 END), 0) card_total,
+            COALESCE(SUM(CASE WHEN payment_method = 'pix' AND status = 'vendido' THEN unit_price ELSE 0 END), 0) pix_total
+         FROM tickets WHERE DATE(sold_at) = ?"
     );
-    $roomStmt->execute([$dashboardDate]);
-    $roomRows = $roomStmt->fetchAll();
+    $paymentStmt->execute([$dashboardDate]);
+    $paymentSummary = $paymentStmt->fetch();
+
+    $cashRowsStmt = db()->prepare(
+        "SELECT cash_registers.*, users.name user_name
+         FROM cash_registers
+         INNER JOIN users ON users.id = cash_registers.user_id
+         WHERE DATE(cash_registers.opened_at) = ?
+         ORDER BY cash_registers.opened_at ASC"
+    );
+    $cashRowsStmt->execute([$dashboardDate]);
+    $cashRows = $cashRowsStmt->fetchAll();
     $totalCapacity = array_sum(array_map(static fn($row) => (int) $row['capacity'], $sessionRows));
     $totalOccupied = array_sum(array_map(static fn($row) => (int) $row['sold'], $sessionRows));
     $overallOccupancy = $totalCapacity > 0 ? min(100, round(($totalOccupied / $totalCapacity) * 100)) : 0;
-    $maxRoomRevenue = max(1, ...array_map(static fn($row) => (float) $row['revenue'], $roomRows ?: [['revenue' => 1]]));
 
-    layout('Painel', function () use ($stats, $dashboardDate, $sessionRows, $hourRows, $maxHourTickets, $roomRows, $totalOccupied, $totalCapacity, $overallOccupancy, $maxRoomRevenue) {
+    layout('Painel', function () use ($stats, $dashboardDate, $sessionRows, $cashSummary, $paymentSummary, $cashRows, $totalOccupied, $totalCapacity, $overallOccupancy) {
         ?>
         <div class="section-head cockpit-head">
             <div>
                 <h1>Cockpit de Vendas</h1>
-                <p class="muted">Sessões, ocupação e vendas por horário de exibição</p>
+                <p class="muted">Capacidade, check-ins e movimento financeiro do cinema</p>
             </div>
             <form method="get" class="date-switcher">
                 <input type="hidden" name="route" value="dashboard">
@@ -1789,95 +1788,64 @@ try {
             </div>
         </div>
 
-        <section class="cockpit-grid">
-            <div class="panel chart-panel">
-                <div class="panel-heading"><div><span class="eyebrow">Capacidade</span><h2>Ocupação das sessões</h2></div><span class="chart-legend">Ocupação por sessão</span></div>
-                <div class="occupancy-list">
+        <section class="dashboard-main-grid">
+            <div class="panel capacity-panel">
+                <div class="panel-heading">
+                    <div><span class="eyebrow">Capacidade</span><h2>Sessões, vendas e entradas</h2></div>
+                    <div class="capacity-legend"><span><i class="sold"></i>Vendidos</span><span><i class="checked"></i>Check-in</span></div>
+                </div>
+                <div class="capacity-session-grid">
                     <?php foreach ($sessionRows as $session): ?>
                         <?php
                         $capacity = max(1, (int) $session['capacity']);
                         $sold = (int) $session['sold'];
                         $checkedIn = (int) $session['checked_in'];
                         $remaining = max(0, $sold - $checkedIn);
-                        $percent = min(100, round(($sold / $capacity) * 100));
+                        $soldPercent = min(100, round(($sold / $capacity) * 100));
+                        $checkinPercent = $sold > 0 ? min(100, round(($checkedIn / $sold) * 100)) : 0;
                         ?>
-                        <div class="occupancy-item">
-                            <div>
-                                <strong><?= e(date('H:i', strtotime($session['starts_at']))) ?> - <?= e($session['movie_title']) ?></strong>
-                                <span><?= e($session['room_name']) ?> | <?= e(ucfirst($session['audio_type'])) ?> | <?= $sold ?>/<?= $capacity ?> vendidos</span>
-                                <span class="checkin-line"><?= $checkedIn ?> check-ins | <?= $remaining ?> aguardando entrada</span>
+                        <article class="capacity-card">
+                            <?php if ($session['has_cover']): ?>
+                                <img src="index.php?route=movie_cover&id=<?= (int) $session['movie_id'] ?>" alt="">
+                            <?php else: ?>
+                                <div class="capacity-poster-placeholder">FILME</div>
+                            <?php endif; ?>
+                            <div class="capacity-content">
+                                <div class="capacity-title">
+                                    <div><strong><?= e($session['room_name']) ?></strong><span><?= e($session['movie_title']) ?></span></div>
+                                    <time><?= e(date('H:i', strtotime($session['starts_at']))) ?></time>
+                                </div>
+                                <small><?= e(ucfirst($session['audio_type'])) ?> | <?= $capacity ?> lugares</small>
+                                <div class="capacity-metric"><span>Vendidos <b><?= $sold ?>/<?= $capacity ?></b></span><div><i class="sold" style="width:<?= e($soldPercent) ?>%"></i></div></div>
+                                <div class="capacity-metric"><span>Check-in <b><?= $checkedIn ?>/<?= $sold ?></b></span><div><i class="checked" style="width:<?= e($checkinPercent) ?>%"></i></div></div>
+                                <footer><span><?= $remaining ?> aguardando entrada</span><b><?= e($soldPercent) ?>% ocupado</b></footer>
                             </div>
-                            <div class="occupancy-meter" aria-label="<?= e($percent) ?>% ocupado">
-                                <i style="width: <?= e($percent) ?>%"></i>
-                            </div>
-                            <b><?= e($percent) ?>%</b>
-                        </div>
+                        </article>
                     <?php endforeach; ?>
                     <?php if (!$sessionRows): ?><p class="muted">Nenhuma sessão cadastrada para esta data.</p><?php endif; ?>
                 </div>
             </div>
 
-            <div class="panel chart-panel">
-                <div class="panel-heading"><div><span class="eyebrow">Fluxo</span><h2>Ingressos por horário</h2></div><span class="chart-legend">Quantidade vendida</span></div>
-                <div class="bar-chart">
-                    <?php foreach ($hourRows as $hour): ?>
-                        <?php $height = 12 + (((int) $hour['tickets'] / $maxHourTickets) * 88); ?>
-                        <div class="bar-column">
-                            <span><?= (int) $hour['tickets'] ?> ing.</span>
-                            <i style="height: <?= e($height) ?>%"></i>
-                            <b><?= e(str_pad((string) $hour['hour_label'], 2, '0', STR_PAD_LEFT)) ?>h</b>
-                        </div>
-                    <?php endforeach; ?>
-                    <?php if (!$hourRows): ?><p class="muted">Sem ingressos por horário ainda.</p><?php endif; ?>
+            <aside class="panel finance-panel">
+                <div class="panel-heading"><div><span class="eyebrow">Financeiro</span><h2>Movimento do dia</h2></div></div>
+                <div class="finance-opening">
+                    <span>Abertura dos caixas</span>
+                    <strong>R$ <?= e(number_format((float) $cashSummary['opening_total'], 2, ',', '.')) ?></strong>
+                    <small><?= (int) $cashSummary['registers'] ?> caixa(s) | <?= (int) $cashSummary['open_registers'] ?> aberto(s)</small>
                 </div>
-            </div>
-        </section>
-
-        <section class="panel">
-            <h2>Grade de sessões por sala e horário</h2>
-            <div class="session-grid">
-                <?php foreach ($sessionRows as $session): ?>
-                    <?php
-                    $capacity = max(1, (int) $session['capacity']);
-                    $sold = (int) $session['sold'];
-                    $checkedIn = (int) $session['checked_in'];
-                    $remaining = max(0, $sold - $checkedIn);
-                    $percent = min(100, round(($sold / $capacity) * 100));
-                    ?>
-                    <article class="session-tile">
-                        <?php if ($session['has_cover']): ?>
-                            <img class="session-poster" src="index.php?route=movie_cover&id=<?= (int) $session['movie_id'] ?>" alt="">
-                        <?php else: ?>
-                            <div class="session-poster placeholder" aria-hidden="true"></div>
-                        <?php endif; ?>
-                        <div class="session-time"><?= e(date('H:i', strtotime($session['starts_at']))) ?></div>
-                        <div>
-                            <strong><?= e($session['movie_title']) ?></strong>
-                            <span><?= e($session['room_name']) ?> | <?= e(ucfirst($session['audio_type'])) ?></span>
-                        </div>
-                        <div class="mini-meter"><i style="width: <?= e($percent) ?>%"></i></div>
-                        <small><?= $sold ?> vendidos | <?= $checkedIn ?> check-ins | <?= $remaining ?> aguardando</small>
-                        <small>R$ <?= e(number_format((float) $session['revenue'], 2, ',', '.')) ?></small>
-                    </article>
-                <?php endforeach; ?>
-                <?php if (!$sessionRows): ?><p class="muted">A grade aparece assim que houver sessões para a data selecionada.</p><?php endif; ?>
-            </div>
-        </section>
-
-        <section class="panel">
-            <h2>Vendas por sala</h2>
-            <div class="room-sales-grid">
-                <?php foreach ($roomRows as $room): ?>
-                    <div class="room-sale-card">
-                        <strong><?= e($room['room_name']) ?></strong>
-                        <span><?= (int) $room['tickets'] ?> ingresso(s)</span>
-                        <span><?= (int) $room['checked_in'] ?> check-in(s) | <?= max(0, (int) $room['tickets'] - (int) $room['checked_in']) ?> restante(s)</span>
-                        <b>R$ <?= e(number_format((float) $room['revenue'], 2, ',', '.')) ?></b>
-                        <div class="room-revenue-meter"><i style="width: <?= e(min(100, ((float) $room['revenue'] / $maxRoomRevenue) * 100)) ?>%"></i></div>
-                    </div>
-                <?php endforeach; ?>
-                <?php if (!$roomRows): ?><p class="muted">Sem vendas por sala nesta data.</p><?php endif; ?>
-            </div>
+                <div class="payment-grid">
+                    <div class="payment-card cash"><span>Dinheiro</span><strong>R$ <?= e(number_format((float) $paymentSummary['cash_total'], 2, ',', '.')) ?></strong></div>
+                    <div class="payment-card card"><span>Cartão</span><strong>R$ <?= e(number_format((float) $paymentSummary['card_total'], 2, ',', '.')) ?></strong></div>
+                    <div class="payment-card pix"><span>Pix</span><strong>R$ <?= e(number_format((float) $paymentSummary['pix_total'], 2, ',', '.')) ?></strong></div>
+                </div>
+                <div class="cash-day-list">
+                    <h3>Aberturas do dia</h3>
+                    <?php foreach ($cashRows as $cashRow): ?>
+                        <div><span><strong><?= e($cashRow['user_name']) ?></strong><?= e(date('H:i', strtotime($cashRow['opened_at']))) ?></span><b>R$ <?= e(number_format((float) $cashRow['opening_amount'], 2, ',', '.')) ?></b><i class="<?= e($cashRow['status']) ?>"><?= e(ucfirst($cashRow['status'])) ?></i></div>
+                    <?php endforeach; ?>
+                    <?php if (!$cashRows): ?><p class="muted">Nenhum caixa aberto nesta data.</p><?php endif; ?>
+                </div>
+            </aside>
         </section>
         <?php
     });
