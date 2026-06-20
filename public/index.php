@@ -1279,12 +1279,12 @@ try {
             }
 
             $code = sale_code();
-            $qrToken = ticket_token();
             $insert = db()->prepare(
                 'INSERT INTO tickets (showtime_id, room_seat_id, seller_user_id, cash_register_id, sale_code, qr_token, buyer_name, payment_method, ticket_type, unit_price, total_amount, amount_paid, change_amount, status, sold_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "vendido", NOW())'
             );
             foreach ($availableSeats as $seat) {
+                $qrToken = ticket_token();
                 $ticketType = $ticketTypes[(int) $seat['id']] ?? 'inteira';
                 $unitPrice = $ticketType === 'meia' ? $halfPrice : $fullPrice;
                 $insert->execute([
@@ -1398,39 +1398,34 @@ try {
             throw new RuntimeException('Venda não encontrada.');
         }
         $first = $tickets[0];
-        $seatsByType = ticket_seats_by_type($tickets);
-        $validationUrl = app_url('ticket_validate', ['token' => $first['qr_token'] ?: $first['sale_code']]);
         $cinema = cinema_settings();
-        layout('Ingresso', function () use ($tickets, $first, $seatsByType, $validationUrl, $cinema) {
+        layout('Ingressos', function () use ($tickets, $first, $cinema) {
             ?>
             <div class="section-head no-print">
-                <h1>Ingresso emitido</h1>
+                <h1><?= count($tickets) ?> ingresso(s) emitido(s)</h1>
                 <div class="toolbar">
-                    <a class="button primary" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Abrir recibo para impressão</a>
+                    <a class="button primary" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir ingressos separados</a>
                     <a class="button primary" href="index.php?route=sale_new&showtime_id=<?= (int) $first['showtime_id'] ?>">Nova venda nesta sessão</a>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
             </div>
-            <section class="ticket-print">
-                <h1><?= e($cinema['cinema_name']) ?></h1>
-                <p><strong>Código:</strong> <?= e($first['sale_code']) ?></p>
-                <p><strong>Filme:</strong> <?= e($first['movie_title']) ?></p>
-                <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
-                <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
-                <?php if ($seatsByType['inteira']): ?><p><strong>Inteira:</strong> <?= e(implode(', ', $seatsByType['inteira'])) ?></p><?php endif; ?>
-                <?php if ($seatsByType['meia']): ?><p><strong>Meia:</strong> <?= e(implode(', ', $seatsByType['meia'])) ?></p><?php endif; ?>
-                <p><strong>Pagamento:</strong> <?= e(ucfirst($first['payment_method'])) ?></p>
-                <p><strong>Total:</strong> R$ <?= e(number_format((float) $first['total_amount'], 2, ',', '.')) ?></p>
-                <?php if ($first['payment_method'] === 'dinheiro'): ?>
-                    <p><strong>Recebido:</strong> R$ <?= e(number_format((float) $first['amount_paid'], 2, ',', '.')) ?></p>
-                    <p><strong>Troco:</strong> R$ <?= e(number_format((float) $first['change_amount'], 2, ',', '.')) ?></p>
-                <?php endif; ?>
-                <div class="qr-ticket">
-                    <div id="ticket-qr" data-url="<?= e($validationUrl) ?>"></div>
-                    <p><strong>QR Code:</strong> <?= e($first['qr_token'] ?: $first['sale_code']) ?></p>
-                </div>
-                <p class="muted">Apresente este ingresso na entrada.</p>
-            </section>
+            <div class="ticket-stack">
+                <?php foreach ($tickets as $ticket): ?>
+                    <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
+                    <section class="ticket-print">
+                        <h1><?= e($cinema['cinema_name']) ?></h1>
+                        <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                        <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
+                        <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
+                        <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
+                        <p><strong>Ingresso:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?> | R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
+                        <div class="qr-ticket">
+                            <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
+                            <p><strong>Código:</strong> <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
+                        </div>
+                    </section>
+                <?php endforeach; ?>
+            </div>
             <script src="assets/js/vendor/qrcode.min.js"></script>
             <script src="assets/js/ticket-qr.js"></script>
             <?php
@@ -1447,9 +1442,7 @@ try {
             exit('Venda não encontrada.');
         }
         $first = $tickets[0];
-        $seatsByType = ticket_seats_by_type($tickets);
         $cinema = cinema_settings();
-        $validationUrl = app_url('ticket_validate', ['token' => $first['qr_token'] ?: $first['sale_code']]);
         ?>
         <!doctype html>
         <html lang="pt-br">
@@ -1465,39 +1458,38 @@ try {
                 .receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}
                 h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
                 .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}
-                #ticket-qr{width:36mm;height:36mm;margin:8px auto 4px}#ticket-qr canvas,#ticket-qr img{width:36mm!important;height:36mm!important;display:block}
+                [data-ticket-qr]{width:36mm;height:36mm;margin:8px auto 4px}[data-ticket-qr] canvas,[data-ticket-qr] img{width:36mm!important;height:36mm!important;display:block}
                 .code{text-align:center;font-size:8px;word-break:break-all}.thanks{text-align:center;margin-top:8px;font-weight:700}
-                @media print{.actions{display:none}.receipt{width:40ch;max-width:none;padding:0}@page{size:80mm auto;margin:3mm}}
+                .receipt+.receipt{break-before:page;page-break-before:always}
+                @media print{.actions{display:none}.receipt{width:40ch;max-width:none;padding:0}.receipt+.receipt{break-before:page;page-break-before:always}@page{size:80mm auto;margin:3mm}}
             </style>
         </head>
         <body>
             <div class="actions"><button onclick="window.print()">Imprimir / salvar PDF</button></div>
-            <main class="receipt">
-                <?php if ($cinema['has_logo']): ?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif; ?>
-                <h1><?= e($cinema['cinema_name']) ?></h1>
-                <div class="company">
-                    <?php if ($cinema['cnpj']): ?>CNPJ <?= e($cinema['cnpj']) ?><br><?php endif; ?>
-                    <?php if ($cinema['address']): ?><?= nl2br(e($cinema['address'])) ?><br><?php endif; ?>
-                    <?= e($cinema['phone'] ?: $cinema['whatsapp']) ?>
-                </div>
-                <div class="line"></div>
-                <p><strong>Código:</strong> <?= e($first['sale_code']) ?></p>
-                <p><strong>Filme:</strong> <?= e($first['movie_title']) ?></p>
-                <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
-                <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
-                <?php if ($seatsByType['inteira']): ?><p><strong>Inteira:</strong> <?= e(implode(', ', $seatsByType['inteira'])) ?></p><?php endif; ?>
-                <?php if ($seatsByType['meia']): ?><p><strong>Meia:</strong> <?= e(implode(', ', $seatsByType['meia'])) ?></p><?php endif; ?>
-                <p><strong>Pagamento:</strong> <?= e(ucfirst($first['payment_method'])) ?></p>
-                <p><strong>Total:</strong> R$ <?= e(number_format((float) $first['total_amount'], 2, ',', '.')) ?></p>
-                <?php if ($first['payment_method'] === 'dinheiro'): ?>
-                    <p><strong>Recebido:</strong> R$ <?= e(number_format((float) $first['amount_paid'], 2, ',', '.')) ?></p>
-                    <p><strong>Troco:</strong> R$ <?= e(number_format((float) $first['change_amount'], 2, ',', '.')) ?></p>
-                <?php endif; ?>
-                <div class="line"></div>
-                <div id="ticket-qr" data-url="<?= e($validationUrl) ?>"></div>
-                <div class="code"><?= e($first['qr_token'] ?: $first['sale_code']) ?></div>
-                <p class="thanks">Apresente este ingresso na entrada.</p>
-            </main>
+            <?php foreach ($tickets as $ticket): ?>
+                <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
+                <main class="receipt">
+                    <?php if ($cinema['has_logo']): ?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif; ?>
+                    <h1><?= e($cinema['cinema_name']) ?></h1>
+                    <div class="company">
+                        <?php if ($cinema['cnpj']): ?>CNPJ <?= e($cinema['cnpj']) ?><br><?php endif; ?>
+                        <?php if ($cinema['address']): ?><?= nl2br(e($cinema['address'])) ?><br><?php endif; ?>
+                        <?= e($cinema['phone'] ?: $cinema['whatsapp']) ?>
+                    </div>
+                    <div class="line"></div>
+                    <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
+                    <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                    <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
+                    <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
+                    <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
+                    <p><strong>Tipo:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?></p>
+                    <p><strong>Valor:</strong> R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
+                    <div class="line"></div>
+                    <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
+                    <div class="code"><?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></div>
+                    <p class="thanks">Apresente este ingresso na entrada.</p>
+                </main>
+            <?php endforeach; ?>
             <script src="assets/js/vendor/qrcode.min.js"></script>
             <script src="assets/js/ticket-qr.js"></script>
         </body>

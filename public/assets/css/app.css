@@ -599,6 +599,7 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
     border: 1px dashed #17120f;
     background: white;
 }
+.ticket-stack { display: grid; gap: 14px; }
 .qr-ticket {
     display: grid;
     justify-items: center;
@@ -610,12 +611,16 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
     background: #fffdf9;
     text-align: center;
 }
+.qr-ticket [data-ticket-qr],
+.qr-ticket [data-ticket-qr] canvas,
+.qr-ticket [data-ticket-qr] img,
 .qr-ticket #ticket-qr,
 .qr-ticket #ticket-qr canvas,
 .qr-ticket #ticket-qr img {
     width: 180px;
     height: 180px;
 }
+.qr-ticket [data-ticket-qr] img,
 .qr-ticket #ticket-qr img { display: block; }
 .qr-ticket p {
     margin: 0;
