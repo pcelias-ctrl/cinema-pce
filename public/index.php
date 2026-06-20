@@ -42,7 +42,7 @@ function layout(string $title, callable $content): void
             <nav class="app-header navbar navbar-expand bg-body">
                 <div class="container-fluid">
                     <a class="nav-link sidebar-toggle" data-lte-toggle="sidebar" href="#" role="button" aria-label="Alternar menu" title="Alternar menu">☰</a>
-                    <span class="navbar-text ms-auto"><?= e($user['name']) ?></span>
+                    <span class="navbar-text ms-auto app-user-status"><strong>CineSys by PCE</strong><span>Logado como: <?= e($user['name']) ?></span></span>
                 </div>
             </nav>
             <aside class="app-sidebar sidebar bg-body-secondary shadow" data-bs-theme="dark">
