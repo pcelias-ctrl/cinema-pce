@@ -123,6 +123,7 @@ CREATE TABLE showtimes (
     room_id INT UNSIGNED NOT NULL,
     starts_at DATETIME NOT NULL,
     audio_type ENUM('legendado', 'dublado') NOT NULL,
+    is_3d TINYINT(1) NOT NULL DEFAULT 0,
     price DECIMAL(10,2) NOT NULL,
     half_price DECIMAL(10,2) NULL,
     status ENUM('programada', 'cancelada', 'encerrada') NOT NULL DEFAULT 'programada',

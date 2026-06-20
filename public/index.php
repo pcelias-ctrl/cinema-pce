@@ -434,6 +434,10 @@ function ensure_ticket_pricing_columns(): void
     if (!$ticketType) {
         db()->exec("ALTER TABLE tickets ADD COLUMN ticket_type ENUM('inteira','meia') NOT NULL DEFAULT 'inteira' AFTER payment_method");
     }
+    $is3d = db()->query("SHOW COLUMNS FROM showtimes LIKE 'is_3d'")->fetch();
+    if (!$is3d) {
+        db()->exec('ALTER TABLE showtimes ADD COLUMN is_3d TINYINT(1) NOT NULL DEFAULT 0 AFTER audio_type');
+    }
     $ready = true;
 }
 
@@ -1208,7 +1212,7 @@ try {
                                 </div>
                             </td>
                             <td><?= e($showtime['room_name']) ?></td>
-                            <td><?= e(ucfirst($showtime['audio_type'])) ?></td>
+                            <td><?= e(ucfirst($showtime['audio_type'])) ?><?= !empty($showtime['is_3d']) ? ' | 3D' : ' | 2D' ?></td>
                             <td><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?></td>
                             <td>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></td>
                             <td>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></td>
@@ -1231,7 +1235,7 @@ try {
         Auth::requireAdmin();
         $movies = db()->query('SELECT id, title FROM movies WHERE active = 1 ORDER BY title')->fetchAll();
         $rooms = db()->query('SELECT id, name FROM rooms WHERE active = 1 ORDER BY name')->fetchAll();
-        $showtime = ['movie_id' => '', 'room_id' => '', 'audio_type' => 'dublado', 'starts_at' => '', 'price' => '', 'half_price' => '', 'status' => 'programada'];
+        $showtime = ['movie_id' => '', 'room_id' => '', 'audio_type' => 'dublado', 'is_3d' => 0, 'starts_at' => '', 'price' => '', 'half_price' => '', 'status' => 'programada'];
 
         if ($route === 'showtime_edit') {
             $stmt = db()->prepare('SELECT * FROM showtimes WHERE id = ?');
@@ -1245,6 +1249,7 @@ try {
             $movieId = (int) ($_POST['movie_id'] ?? 0);
             $roomId = (int) ($_POST['room_id'] ?? 0);
             $audioType = ($_POST['audio_type'] ?? 'dublado') === 'legendado' ? 'legendado' : 'dublado';
+            $is3d = !empty($_POST['is_3d']) ? 1 : 0;
             $price = money_to_decimal($_POST['price'] ?? '0');
             $halfPrice = money_to_decimal($_POST['half_price'] ?? '0');
             if ($price <= 0 || $halfPrice <= 0) {
@@ -1263,18 +1268,18 @@ try {
             }
 
             if ($route === 'showtime_new') {
-                $stmt = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
+                $stmt = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
                 foreach ($starts as $startsAt) {
-                    $stmt->execute([$movieId, $roomId, $startsAt, $audioType, $price, $halfPrice, $status]);
+                    $stmt->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $price, $halfPrice, $status]);
                 }
             } else {
-                $stmt = db()->prepare('UPDATE showtimes SET movie_id=?, room_id=?, starts_at=?, audio_type=?, price=?, half_price=?, status=? WHERE id=?');
-                $stmt->execute([$movieId, $roomId, $starts[0], $audioType, $price, $halfPrice, $status, (int) $_GET['id']]);
+                $stmt = db()->prepare('UPDATE showtimes SET movie_id=?, room_id=?, starts_at=?, audio_type=?, is_3d=?, price=?, half_price=?, status=? WHERE id=?');
+                $stmt->execute([$movieId, $roomId, $starts[0], $audioType, $is3d, $price, $halfPrice, $status, (int) $_GET['id']]);
 
                 if (count($starts) > 1) {
-                    $insert = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
+                    $insert = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
                     foreach (array_slice($starts, 1) as $startsAt) {
-                        $insert->execute([$movieId, $roomId, $startsAt, $audioType, $price, $halfPrice, $status]);
+                        $insert->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $price, $halfPrice, $status]);
                     }
                 }
             }
@@ -1314,6 +1319,7 @@ try {
                             <option value="legendado" <?= $showtime['audio_type'] === 'legendado' ? 'selected' : '' ?>>Legendado</option>
                         </select>
                     </label>
+                    <label class="check-label"><input type="checkbox" name="is_3d" value="1" <?= !empty($showtime['is_3d']) ? 'checked' : '' ?>> Sessão com óculos 3D</label>
                     <label>Valor inteira<input name="price" inputmode="decimal" placeholder="Ex: 30,00" value="<?= e($showtime['price'] !== '' ? number_format((float) $showtime['price'], 2, ',', '.') : '') ?>" required></label>
                     <label>Valor meia<input name="half_price" inputmode="decimal" placeholder="Ex: 15,00" value="<?= e($showtime['half_price'] !== '' ? number_format((float) $showtime['half_price'], 2, ',', '.') : '') ?>" required></label>
                     <label>Status
@@ -1502,7 +1508,7 @@ try {
                         <?php if ($showtime['has_cover']): ?><img src="index.php?route=movie_cover&id=<?= (int) $showtime['movie_id'] ?>" alt=""><?php endif; ?>
                         <div>
                             <h2><?= e($showtime['movie_title']) ?></h2>
-                            <p><?= e($showtime['room_name']) ?> | <?= e(ucfirst($showtime['audio_type'])) ?> | <?= e(date('H:i', strtotime($showtime['starts_at']))) ?></p>
+                            <p><?= e($showtime['room_name']) ?> | <?= e(ucfirst($showtime['audio_type'])) ?> | <?= !empty($showtime['is_3d']) ? '3D' : '2D' ?> | <?= e(date('H:i', strtotime($showtime['starts_at']))) ?></p>
                             <p>Inteira R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?> | Meia R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></p>
                             <a class="button primary" href="<?= $cash ? 'index.php?route=sale_new&showtime_id=' . (int) $showtime['id'] : 'index.php?route=cash_register' ?>">Vender</a>
                         </div>
@@ -1702,7 +1708,7 @@ try {
                             <span class="eyebrow">Venda de ingressos</span>
                             <h1><?= e($showtime['movie_title']) ?></h1>
                             <strong><?= e($showtime['room_name']) ?></strong>
-                            <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(ucfirst($showtime['audio_type'])) ?></span>
+                            <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(ucfirst($showtime['audio_type'])) ?> | <?= !empty($showtime['is_3d']) ? '3D' : '2D' ?></span>
                         </div>
                         <?php if ($showtime['has_cover']): ?><img class="sale-side-cover" src="index.php?route=movie_cover&id=<?= (int) $showtime['movie_id'] ?>" alt="Capa de <?= e($showtime['movie_title']) ?>"><?php endif; ?>
                     </div>
