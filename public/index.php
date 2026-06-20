@@ -35,7 +35,7 @@ function layout(string $title, callable $content): void
         <link rel="stylesheet" href="assets/vendor/adminlte/css/adminlte.min.css">
         <link rel="stylesheet" href="assets/css/app.css">
     </head>
-    <body class="layout-fixed sidebar-expand-lg bg-body-tertiary <?= $user ? 'app-shell' : 'public-shell' ?>">
+    <body class="layout-fixed sidebar-expand-lg bg-body-tertiary route-<?= e(str_replace('_', '-', $currentRoute)) ?> <?= $user ? 'app-shell' : 'public-shell' ?>">
       <div class="app-wrapper">
         <?php if ($user): ?>
             <nav class="app-header navbar navbar-expand bg-body">
@@ -62,9 +62,10 @@ function layout(string $title, callable $content): void
                                 <li class="nav-item"><a class="nav-link <?= $navClass('movies') ?>" href="index.php?route=movies"><i></i><p>Filmes</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('rooms') ?>" href="index.php?route=rooms"><i></i><p>Salas</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('showtimes') ?>" href="index.php?route=showtimes"><i></i><p>Sessões</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('cinema_settings') ?>" href="index.php?route=cinema_settings"><i></i><p>Cinema</p></a></li>
                             <?php endif; ?>
                             <li class="nav-header">OPERAÇÃO</li>
-                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Leitor QR</p></a></li>
                             <?php if ($user['role'] === 'administrador'): ?>
@@ -242,6 +243,81 @@ function app_url(string $route, array $params = []): string
     return $scheme . '://' . $host . '/index.php?' . $query;
 }
 
+function cinema_settings(): array
+{
+    static $settings = null;
+    if ($settings !== null) return $settings;
+
+    $defaults = [
+        'id' => 1, 'cinema_name' => config_value('app_name'), 'cnpj' => '', 'address' => '',
+        'whatsapp' => '', 'phone' => '', 'email' => '', 'smtp_enabled' => 0,
+        'smtp_host' => '', 'smtp_port' => 587, 'smtp_encryption' => 'tls', 'smtp_auth' => 1,
+        'smtp_username' => '', 'smtp_password_encrypted' => '', 'smtp_from_name' => '',
+        'smtp_from_email' => '', 'smtp_reply_to' => '', 'smtp_timeout' => 30,
+    ];
+    try {
+        $row = db()->query('SELECT * FROM cinema_settings WHERE id = 1')->fetch();
+        $settings = array_merge($defaults, $row ?: []);
+    } catch (Throwable $exception) {
+        $settings = $defaults;
+    }
+    return $settings;
+}
+
+function ensure_cinema_settings_table(): void
+{
+    db()->exec("CREATE TABLE IF NOT EXISTS cinema_settings (
+        id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
+        cinema_name VARCHAR(180) NOT NULL,
+        cnpj VARCHAR(20) NULL,
+        address TEXT NULL,
+        whatsapp VARCHAR(30) NULL,
+        phone VARCHAR(30) NULL,
+        email VARCHAR(180) NULL,
+        smtp_enabled TINYINT(1) NOT NULL DEFAULT 0,
+        smtp_host VARCHAR(255) NULL,
+        smtp_port SMALLINT UNSIGNED NOT NULL DEFAULT 587,
+        smtp_encryption ENUM('none','tls','ssl') NOT NULL DEFAULT 'tls',
+        smtp_auth TINYINT(1) NOT NULL DEFAULT 1,
+        smtp_username VARCHAR(255) NULL,
+        smtp_password_encrypted TEXT NULL,
+        smtp_from_name VARCHAR(180) NULL,
+        smtp_from_email VARCHAR(180) NULL,
+        smtp_reply_to VARCHAR(180) NULL,
+        smtp_timeout SMALLINT UNSIGNED NOT NULL DEFAULT 30,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    db()->exec("INSERT INTO cinema_settings (id, cinema_name) VALUES (1, 'Cinema PCE') ON DUPLICATE KEY UPDATE id=id");
+}
+
+function encrypt_setting(string $value): string
+{
+    if ($value === '') return '';
+    $key = hash('sha256', (string) config_value('settings_key'), true);
+    $iv = random_bytes(12);
+    $tag = '';
+    $encrypted = openssl_encrypt($value, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+    if ($encrypted === false) throw new RuntimeException('Não foi possível proteger a senha SMTP.');
+    return base64_encode($iv . $tag . $encrypted);
+}
+
+function sale_tickets(string $saleCode): array
+{
+    $stmt = db()->prepare(
+        'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
+         FROM tickets
+         INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
+         INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
+         INNER JOIN movies ON movies.id = showtimes.movie_id
+         INNER JOIN rooms ON rooms.id = showtimes.room_id
+         WHERE tickets.sale_code = ?
+         ORDER BY room_seats.row_label, room_seats.seat_number'
+    );
+    $stmt->execute([$saleCode]);
+    return $stmt->fetchAll();
+}
+
 function open_cash_register(?int $userId = null): ?array
 {
     $userId = $userId ?: (int) Auth::user()['id'];
@@ -320,6 +396,84 @@ try {
 
     if (($route === 'dashboard' || $route === '') && Auth::user()['role'] !== 'administrador') {
         redirect_to('sales');
+    }
+
+    if ($route === 'cinema_settings') {
+        Auth::requireAdmin();
+        ensure_cinema_settings_table();
+        $stmt = db()->query('SELECT * FROM cinema_settings WHERE id = 1');
+        $settings = $stmt->fetch() ?: cinema_settings();
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            $password = trim($_POST['smtp_password'] ?? '');
+            $encryptedPassword = $password !== '' ? encrypt_setting($password) : ($settings['smtp_password_encrypted'] ?? '');
+            $encryption = in_array($_POST['smtp_encryption'] ?? '', ['none', 'tls', 'ssl'], true) ? $_POST['smtp_encryption'] : 'tls';
+            $sql = 'INSERT INTO cinema_settings
+                (id, cinema_name, cnpj, address, whatsapp, phone, email, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE cinema_name=VALUES(cinema_name), cnpj=VALUES(cnpj), address=VALUES(address), whatsapp=VALUES(whatsapp), phone=VALUES(phone), email=VALUES(email), smtp_enabled=VALUES(smtp_enabled), smtp_host=VALUES(smtp_host), smtp_port=VALUES(smtp_port), smtp_encryption=VALUES(smtp_encryption), smtp_auth=VALUES(smtp_auth), smtp_username=VALUES(smtp_username), smtp_password_encrypted=VALUES(smtp_password_encrypted), smtp_from_name=VALUES(smtp_from_name), smtp_from_email=VALUES(smtp_from_email), smtp_reply_to=VALUES(smtp_reply_to), smtp_timeout=VALUES(smtp_timeout)';
+            $save = db()->prepare($sql);
+            $save->execute([
+                trim($_POST['cinema_name'] ?? '') ?: config_value('app_name'),
+                trim($_POST['cnpj'] ?? '') ?: null,
+                trim($_POST['address'] ?? '') ?: null,
+                trim($_POST['whatsapp'] ?? '') ?: null,
+                trim($_POST['phone'] ?? '') ?: null,
+                trim($_POST['email'] ?? '') ?: null,
+                isset($_POST['smtp_enabled']) ? 1 : 0,
+                trim($_POST['smtp_host'] ?? '') ?: null,
+                max(1, (int) ($_POST['smtp_port'] ?? 587)),
+                $encryption,
+                isset($_POST['smtp_auth']) ? 1 : 0,
+                trim($_POST['smtp_username'] ?? '') ?: null,
+                $encryptedPassword ?: null,
+                trim($_POST['smtp_from_name'] ?? '') ?: null,
+                trim($_POST['smtp_from_email'] ?? '') ?: null,
+                trim($_POST['smtp_reply_to'] ?? '') ?: null,
+                max(1, (int) ($_POST['smtp_timeout'] ?? 30)),
+            ]);
+            redirect_to('cinema_settings');
+        }
+
+        layout('Configurações do Cinema', function () use ($settings) {
+            ?>
+            <div class="section-head"><div><h1>Configurações do Cinema</h1><p class="muted">Dados institucionais e envio de e-mails.</p></div></div>
+            <form method="post" class="form wide">
+                <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                <section class="panel settings-section">
+                    <h2>Dados do cinema</h2>
+                    <div class="columns">
+                        <label>Nome do cinema<input name="cinema_name" value="<?= e($settings['cinema_name']) ?>" required></label>
+                        <label>CNPJ<input name="cnpj" value="<?= e($settings['cnpj']) ?>" placeholder="00.000.000/0000-00"></label>
+                        <label>E-mail<input name="email" type="email" value="<?= e($settings['email']) ?>"></label>
+                        <label>WhatsApp<input name="whatsapp" value="<?= e($settings['whatsapp']) ?>" placeholder="(00) 00000-0000"></label>
+                        <label>Telefone<input name="phone" value="<?= e($settings['phone']) ?>" placeholder="(00) 0000-0000"></label>
+                    </div>
+                    <label>Endereço<textarea name="address" rows="3"><?= e($settings['address']) ?></textarea></label>
+                </section>
+                <section class="panel settings-section">
+                    <div class="settings-title"><h2>Servidor SMTP</h2><label class="check-label"><input type="checkbox" name="smtp_enabled" value="1" <?= $settings['smtp_enabled'] ? 'checked' : '' ?>> Ativar envio de e-mails</label></div>
+                    <div class="columns">
+                        <label>Servidor SMTP<input name="smtp_host" value="<?= e($settings['smtp_host']) ?>" placeholder="smtp.exemplo.com"></label>
+                        <label>Porta<input name="smtp_port" type="number" min="1" max="65535" value="<?= e($settings['smtp_port']) ?>"></label>
+                        <label>Segurança<select name="smtp_encryption"><option value="none" <?= $settings['smtp_encryption'] === 'none' ? 'selected' : '' ?>>Nenhuma</option><option value="tls" <?= $settings['smtp_encryption'] === 'tls' ? 'selected' : '' ?>>TLS / STARTTLS</option><option value="ssl" <?= $settings['smtp_encryption'] === 'ssl' ? 'selected' : '' ?>>SSL</option></select></label>
+                        <label>Usuário SMTP<input name="smtp_username" value="<?= e($settings['smtp_username']) ?>" autocomplete="off"></label>
+                        <label>Senha SMTP<input name="smtp_password" type="password" placeholder="<?= $settings['smtp_password_encrypted'] ? 'Senha configurada; deixe vazio para manter' : 'Informe a senha' ?>" autocomplete="new-password"></label>
+                        <label>Timeout (segundos)<input name="smtp_timeout" type="number" min="1" value="<?= e($settings['smtp_timeout']) ?>"></label>
+                    </div>
+                    <label class="check-label"><input type="checkbox" name="smtp_auth" value="1" <?= $settings['smtp_auth'] ? 'checked' : '' ?>> Servidor exige autenticação</label>
+                    <div class="columns">
+                        <label>Nome do remetente<input name="smtp_from_name" value="<?= e($settings['smtp_from_name']) ?>"></label>
+                        <label>E-mail do remetente<input name="smtp_from_email" type="email" value="<?= e($settings['smtp_from_email']) ?>"></label>
+                        <label>Responder para<input name="smtp_reply_to" type="email" value="<?= e($settings['smtp_reply_to']) ?>"></label>
+                    </div>
+                </section>
+                <button class="button primary">Salvar configurações</button>
+            </form>
+            <?php
+        });
+        exit;
     }
 
     if ($route === 'movie_cover') {
@@ -1127,35 +1281,25 @@ try {
     if ($route === 'ticket_receipt') {
         Auth::requireLogin();
         $saleCode = trim($_GET['sale_code'] ?? '');
-        $stmt = db()->prepare(
-            'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
-             FROM tickets
-             INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
-             INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
-             INNER JOIN movies ON movies.id = showtimes.movie_id
-             INNER JOIN rooms ON rooms.id = showtimes.room_id
-             WHERE tickets.sale_code = ?
-             ORDER BY room_seats.row_label, room_seats.seat_number'
-        );
-        $stmt->execute([$saleCode]);
-        $tickets = $stmt->fetchAll();
+        $tickets = sale_tickets($saleCode);
         if (!$tickets) {
             throw new RuntimeException('Venda não encontrada.');
         }
         $first = $tickets[0];
         $validationUrl = app_url('ticket_validate', ['token' => $first['qr_token'] ?: $first['sale_code']]);
-        layout('Ingresso', function () use ($tickets, $first, $validationUrl) {
+        $cinema = cinema_settings();
+        layout('Ingresso', function () use ($tickets, $first, $validationUrl, $cinema) {
             ?>
             <div class="section-head no-print">
                 <h1>Ingresso emitido</h1>
                 <div class="toolbar">
-                    <button class="button primary" onclick="window.print()">Imprimir / salvar PDF</button>
+                    <a class="button primary" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Abrir recibo para impressão</a>
                     <a class="button primary" href="index.php?route=sale_new&showtime_id=<?= (int) $first['showtime_id'] ?>">Nova venda nesta sessão</a>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
             </div>
             <section class="ticket-print">
-                <h1>Cinema PCE</h1>
+                <h1><?= e($cinema['cinema_name']) ?></h1>
                 <p><strong>Código:</strong> <?= e($first['sale_code']) ?></p>
                 <p><strong>Filme:</strong> <?= e($first['movie_title']) ?></p>
                 <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
@@ -1177,6 +1321,70 @@ try {
             <script src="assets/js/ticket-qr.js"></script>
             <?php
         });
+        exit;
+    }
+
+    if ($route === 'ticket_print') {
+        Auth::requireLogin();
+        $saleCode = trim($_GET['sale_code'] ?? '');
+        $tickets = sale_tickets($saleCode);
+        if (!$tickets) {
+            http_response_code(404);
+            exit('Venda não encontrada.');
+        }
+        $first = $tickets[0];
+        $cinema = cinema_settings();
+        $validationUrl = app_url('ticket_validate', ['token' => $first['qr_token'] ?: $first['sale_code']]);
+        ?>
+        <!doctype html>
+        <html lang="pt-br">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Recibo <?= e($first['sale_code']) ?></title>
+            <style>
+                *{box-sizing:border-box} body{margin:0;background:#fff;color:#111;font:13px Arial,sans-serif}
+                .actions{display:flex;justify-content:center;gap:8px;padding:14px;background:#f3f3f3}
+                .actions button{padding:9px 14px;border:0;border-radius:3px;background:#c2410c;color:#fff;font-weight:700;cursor:pointer}
+                .receipt{width:80mm;max-width:100%;margin:0 auto;padding:8mm 5mm;text-align:left}
+                h1{margin:0 0 3px;text-align:center;font-size:20px} .company{text-align:center;margin-bottom:14px;color:#444}
+                .line{border-top:1px dashed #777;margin:10px 0} p{margin:5px 0;line-height:1.35}
+                #ticket-qr{width:170px;height:170px;margin:14px auto 6px} #ticket-qr canvas,#ticket-qr img{width:170px!important;height:170px!important;display:block}
+                .code{text-align:center;font-size:9px;word-break:break-all}.thanks{text-align:center;margin-top:12px;font-weight:700}
+                @media print{.actions{display:none}.receipt{width:100%;padding:0} @page{margin:7mm}}
+            </style>
+        </head>
+        <body>
+            <div class="actions"><button onclick="window.print()">Imprimir / salvar PDF</button></div>
+            <main class="receipt">
+                <h1><?= e($cinema['cinema_name']) ?></h1>
+                <div class="company">
+                    <?php if ($cinema['cnpj']): ?>CNPJ <?= e($cinema['cnpj']) ?><br><?php endif; ?>
+                    <?php if ($cinema['address']): ?><?= nl2br(e($cinema['address'])) ?><br><?php endif; ?>
+                    <?= e($cinema['phone'] ?: $cinema['whatsapp']) ?>
+                </div>
+                <div class="line"></div>
+                <p><strong>Código:</strong> <?= e($first['sale_code']) ?></p>
+                <p><strong>Filme:</strong> <?= e($first['movie_title']) ?></p>
+                <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
+                <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
+                <p><strong>Poltronas:</strong> <?= e(implode(', ', array_column($tickets, 'seat_code'))) ?></p>
+                <p><strong>Pagamento:</strong> <?= e(ucfirst($first['payment_method'])) ?></p>
+                <p><strong>Total:</strong> R$ <?= e(number_format((float) $first['total_amount'], 2, ',', '.')) ?></p>
+                <?php if ($first['payment_method'] === 'dinheiro'): ?>
+                    <p><strong>Recebido:</strong> R$ <?= e(number_format((float) $first['amount_paid'], 2, ',', '.')) ?></p>
+                    <p><strong>Troco:</strong> R$ <?= e(number_format((float) $first['change_amount'], 2, ',', '.')) ?></p>
+                <?php endif; ?>
+                <div class="line"></div>
+                <div id="ticket-qr" data-url="<?= e($validationUrl) ?>"></div>
+                <div class="code"><?= e($first['qr_token'] ?: $first['sale_code']) ?></div>
+                <p class="thanks">Apresente este ingresso na entrada.</p>
+            </main>
+            <script src="assets/js/vendor/qrcode.min.js"></script>
+            <script src="assets/js/ticket-qr.js"></script>
+        </body>
+        </html>
+        <?php
         exit;
     }
 

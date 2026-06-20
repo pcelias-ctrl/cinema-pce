@@ -16,6 +16,29 @@ CREATE TABLE app_sessions (
     INDEX idx_app_sessions_expires_at (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE cinema_settings (
+    id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
+    cinema_name VARCHAR(180) NOT NULL,
+    cnpj VARCHAR(20) NULL,
+    address TEXT NULL,
+    whatsapp VARCHAR(30) NULL,
+    phone VARCHAR(30) NULL,
+    email VARCHAR(180) NULL,
+    smtp_enabled TINYINT(1) NOT NULL DEFAULT 0,
+    smtp_host VARCHAR(255) NULL,
+    smtp_port SMALLINT UNSIGNED NOT NULL DEFAULT 587,
+    smtp_encryption ENUM('none', 'tls', 'ssl') NOT NULL DEFAULT 'tls',
+    smtp_auth TINYINT(1) NOT NULL DEFAULT 1,
+    smtp_username VARCHAR(255) NULL,
+    smtp_password_encrypted TEXT NULL,
+    smtp_from_name VARCHAR(180) NULL,
+    smtp_from_email VARCHAR(180) NULL,
+    smtp_reply_to VARCHAR(180) NULL,
+    smtp_timeout SMALLINT UNSIGNED NOT NULL DEFAULT 30,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE movies (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     title VARCHAR(180) NOT NULL,

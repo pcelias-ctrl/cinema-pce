@@ -455,6 +455,10 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
     display: block;
     padding-bottom: 12px;
 }
+.route-sale-new .app-header { min-height: 42px; }
+.route-sale-new .page { padding-top: 8px; }
+.route-sale-new .sale-map-panel { padding-top: 8px; }
+.route-sale-new .sale-head { margin-bottom: 4px; }
 .sale-workbench {
     width: 100%;
     margin-left: 0;
@@ -648,6 +652,11 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .validation-detail p {
     margin: 0 0 10px;
 }
+.settings-section { display: grid; gap: 14px; }
+.settings-section h2 { margin-bottom: 0; }
+.settings-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.check-label { display: inline-flex; align-items: center; gap: 7px; color: var(--ink); }
+.check-label input { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--brand); }
 .room-editor { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #e7dfd2; padding: 16px; }
 .room-canvas {
     position: relative;
@@ -716,6 +725,7 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
     .validation-detail img { width: 86px; height: 126px; }
     .panel-heading { align-items: flex-start; flex-direction: column; }
     .bar-chart { overflow-x: auto; }
+    .settings-title { align-items: flex-start; flex-direction: column; }
 }
 @media print {
     body { background: white; }

@@ -4,6 +4,7 @@ return [
     'app_name' => getenv('APP_NAME') ?: 'Cinema PCE',
     'app_env' => getenv('APP_ENV') ?: 'local',
     'app_url' => getenv('APP_URL') ?: 'http://localhost:8080',
+    'settings_key' => getenv('SETTINGS_KEY') ?: (getenv('DB_PASS') ?: 'cinema-pce-local-key'),
     'db' => [
         'host' => getenv('DB_HOST') ?: '127.0.0.1',
         'port' => getenv('DB_PORT') ?: '3306',
@@ -13,4 +14,3 @@ return [
         'charset' => 'utf8mb4',
     ],
 ];
-
