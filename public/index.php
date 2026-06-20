@@ -68,6 +68,8 @@ function layout(string $title, callable $content): void
                                 <li class="nav-item"><a class="nav-link <?= $navClass('showtimes') ?>" href="index.php?route=showtimes"><i></i><p>Sessões</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('product_categories') ?>" href="index.php?route=product_categories"><i></i><p>Categorias</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('products') ?>" href="index.php?route=products"><i></i><p>Produtos</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('product_report') ?>" href="index.php?route=product_report"><i></i><p>Relatório de Produtos</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('users') ?>" href="index.php?route=users"><i></i><p>Usuários</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('cinema_settings') ?>" href="index.php?route=cinema_settings"><i></i><p>Cinema</p></a></li>
                             <?php endif; ?>
                             <li class="nav-header">OPERAÇÃO</li>
@@ -75,10 +77,6 @@ function layout(string $title, callable $content): void
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Check-in QR</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['product_pickup', 'product_pickup_lookup'], true) ? 'active' : '' ?>" href="index.php?route=product_pickup"><i></i><p>Retira de Produtos</p></a></li>
-                            <?php if ($user['role'] === 'administrador'): ?>
-                                <li class="nav-item"><a class="nav-link <?= $navClass('users') ?>" href="index.php?route=users"><i></i><p>Usuários</p></a></li>
-                                <li class="nav-item"><a class="nav-link <?= $navClass('product_report') ?>" href="index.php?route=product_report"><i></i><p>Relatório de Produtos</p></a></li>
-                            <?php endif; ?>
                             <li class="nav-item logout-link"><a class="nav-link" href="index.php?route=logout"><i></i><p>Sair</p></a></li>
                         </ul>
                     </nav>
