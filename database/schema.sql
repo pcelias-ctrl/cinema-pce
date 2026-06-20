@@ -26,6 +26,7 @@ CREATE TABLE cinema_settings (
     email VARCHAR(180) NULL,
     logo_mime VARCHAR(80) NULL,
     logo_data LONGBLOB NULL,
+    checkin_advance_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 30,
     smtp_enabled TINYINT(1) NOT NULL DEFAULT 0,
     smtp_host VARCHAR(255) NULL,
     smtp_port SMALLINT UNSIGNED NOT NULL DEFAULT 587,

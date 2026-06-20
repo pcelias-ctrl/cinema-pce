@@ -272,16 +272,23 @@ function cinema_settings(): array
 
     $defaults = [
         'id' => 1, 'cinema_name' => config_value('app_name'), 'cnpj' => '', 'address' => '',
-        'whatsapp' => '', 'phone' => '', 'email' => '', 'has_logo' => false, 'smtp_enabled' => 0,
+        'whatsapp' => '', 'phone' => '', 'email' => '', 'has_logo' => false, 'checkin_advance_minutes' => 30, 'smtp_enabled' => 0,
         'smtp_host' => '', 'smtp_port' => 587, 'smtp_encryption' => 'tls', 'smtp_auth' => 1,
         'smtp_username' => '', 'smtp_password_encrypted' => '', 'smtp_from_name' => '',
         'smtp_from_email' => '', 'smtp_reply_to' => '', 'smtp_timeout' => 30,
     ];
+    $sql = 'SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, checkin_advance_minutes, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1';
     try {
-        $row = db()->query('SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1')->fetch();
+        $row = db()->query($sql)->fetch();
         $settings = array_merge($defaults, $row ?: []);
     } catch (Throwable $exception) {
-        $settings = $defaults;
+        try {
+            ensure_cinema_settings_table();
+            $row = db()->query($sql)->fetch();
+            $settings = array_merge($defaults, $row ?: []);
+        } catch (Throwable $migrationException) {
+            $settings = $defaults;
+        }
     }
     return $settings;
 }
@@ -298,6 +305,7 @@ function ensure_cinema_settings_table(): void
         email VARCHAR(180) NULL,
         logo_mime VARCHAR(80) NULL,
         logo_data LONGBLOB NULL,
+        checkin_advance_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 30,
         smtp_enabled TINYINT(1) NOT NULL DEFAULT 0,
         smtp_host VARCHAR(255) NULL,
         smtp_port SMALLINT UNSIGNED NOT NULL DEFAULT 587,
@@ -315,6 +323,10 @@ function ensure_cinema_settings_table(): void
     $logoColumn = db()->query("SHOW COLUMNS FROM cinema_settings LIKE 'logo_mime'")->fetch();
     if (!$logoColumn) {
         db()->exec('ALTER TABLE cinema_settings ADD COLUMN logo_mime VARCHAR(80) NULL AFTER email, ADD COLUMN logo_data LONGBLOB NULL AFTER logo_mime');
+    }
+    $checkinColumn = db()->query("SHOW COLUMNS FROM cinema_settings LIKE 'checkin_advance_minutes'")->fetch();
+    if (!$checkinColumn) {
+        db()->exec('ALTER TABLE cinema_settings ADD COLUMN checkin_advance_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 30 AFTER logo_data');
     }
     db()->exec("INSERT INTO cinema_settings (id, cinema_name) VALUES (1, 'Cinema PCE') ON DUPLICATE KEY UPDATE id=id");
 }
@@ -477,7 +489,7 @@ try {
     if ($route === 'cinema_settings') {
         Auth::requireAdmin();
         ensure_cinema_settings_table();
-        $stmt = db()->query('SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1');
+        $stmt = db()->query('SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, checkin_advance_minutes, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1');
         $settings = $stmt->fetch() ?: cinema_settings();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -487,9 +499,9 @@ try {
             $encryptedPassword = $password !== '' ? encrypt_setting($password) : ($settings['smtp_password_encrypted'] ?? '');
             $encryption = in_array($_POST['smtp_encryption'] ?? '', ['none', 'tls', 'ssl'], true) ? $_POST['smtp_encryption'] : 'tls';
             $sql = 'INSERT INTO cinema_settings
-                (id, cinema_name, cnpj, address, whatsapp, phone, email, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout)
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE cinema_name=VALUES(cinema_name), cnpj=VALUES(cnpj), address=VALUES(address), whatsapp=VALUES(whatsapp), phone=VALUES(phone), email=VALUES(email), smtp_enabled=VALUES(smtp_enabled), smtp_host=VALUES(smtp_host), smtp_port=VALUES(smtp_port), smtp_encryption=VALUES(smtp_encryption), smtp_auth=VALUES(smtp_auth), smtp_username=VALUES(smtp_username), smtp_password_encrypted=VALUES(smtp_password_encrypted), smtp_from_name=VALUES(smtp_from_name), smtp_from_email=VALUES(smtp_from_email), smtp_reply_to=VALUES(smtp_reply_to), smtp_timeout=VALUES(smtp_timeout)';
+                (id, cinema_name, cnpj, address, whatsapp, phone, email, checkin_advance_minutes, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE cinema_name=VALUES(cinema_name), cnpj=VALUES(cnpj), address=VALUES(address), whatsapp=VALUES(whatsapp), phone=VALUES(phone), email=VALUES(email), checkin_advance_minutes=VALUES(checkin_advance_minutes), smtp_enabled=VALUES(smtp_enabled), smtp_host=VALUES(smtp_host), smtp_port=VALUES(smtp_port), smtp_encryption=VALUES(smtp_encryption), smtp_auth=VALUES(smtp_auth), smtp_username=VALUES(smtp_username), smtp_password_encrypted=VALUES(smtp_password_encrypted), smtp_from_name=VALUES(smtp_from_name), smtp_from_email=VALUES(smtp_from_email), smtp_reply_to=VALUES(smtp_reply_to), smtp_timeout=VALUES(smtp_timeout)';
             $save = db()->prepare($sql);
             $save->execute([
                 trim($_POST['cinema_name'] ?? '') ?: config_value('app_name'),
@@ -498,6 +510,7 @@ try {
                 trim($_POST['whatsapp'] ?? '') ?: null,
                 trim($_POST['phone'] ?? '') ?: null,
                 trim($_POST['email'] ?? '') ?: null,
+                min(240, max(0, (int) ($_POST['checkin_advance_minutes'] ?? 30))),
                 isset($_POST['smtp_enabled']) ? 1 : 0,
                 trim($_POST['smtp_host'] ?? '') ?: null,
                 max(1, (int) ($_POST['smtp_port'] ?? 587)),
@@ -534,6 +547,7 @@ try {
                         <label>Telefone<input name="phone" value="<?= e($settings['phone']) ?>" placeholder="(00) 0000-0000"></label>
                     </div>
                     <label>Endereço<textarea name="address" rows="3"><?= e($settings['address']) ?></textarea></label>
+                    <label>Antecedência para liberar check-in (minutos)<input name="checkin_advance_minutes" type="number" min="0" max="240" value="<?= e($settings['checkin_advance_minutes']) ?>"><small>Exemplo: 30 libera a entrada meia hora antes da sessão.</small></label>
                     <div class="logo-upload-row">
                         <?php if ($settings['has_logo']): ?><img class="cinema-logo-preview" src="index.php?route=cinema_logo" alt="Logotipo atual"><?php endif; ?>
                         <label>Logotipo do cinema<input name="logo" type="file" accept="image/jpeg,image/png,image/webp"><small>JPG, PNG ou WEBP, até 3 MB. O arquivo será salvo no banco de dados.</small></label>
@@ -1503,7 +1517,8 @@ try {
 
     if ($route === 'qr_reader') {
         Auth::requireLogin();
-        layout('Check-in QR', function () {
+        $cinema = cinema_settings();
+        layout('Check-in QR', function () use ($cinema) {
             ?>
             <div class="section-head">
                 <div>
@@ -1512,6 +1527,7 @@ try {
                 </div>
             </div>
             <section class="panel qr-reader-panel">
+                <div class="entry-policy"><strong>Janela de entrada</strong><span>Check-in liberado <?= (int) ($cinema['checkin_advance_minutes'] ?? 30) ?> minutos antes do início da sessão.</span></div>
                 <div class="qr-camera-box">
                     <video id="qr-video" playsinline muted></video>
                     <canvas id="qr-canvas" hidden></canvas>
@@ -1544,14 +1560,6 @@ try {
             $rawToken = trim($query['token'] ?? $rawToken);
         }
 
-        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            verify_csrf();
-            $stmt = db()->prepare('UPDATE tickets SET checked_in_at = NOW(), checked_in_by = ? WHERE (qr_token = ? OR sale_code = ?) AND status = "vendido" AND checked_in_at IS NULL');
-            $stmt->execute([(int) Auth::user()['id'], $rawToken, $rawToken]);
-            header('Location: index.php?route=ticket_validate&token=' . urlencode($rawToken) . '&checked=' . $stmt->rowCount());
-            exit;
-        }
-
         $tickets = [];
         if ($rawToken !== '') {
             $stmt = db()->prepare(
@@ -1569,9 +1577,32 @@ try {
         }
 
         $first = $tickets[0] ?? null;
+        $cinema = cinema_settings();
+        $advanceMinutes = min(240, max(0, (int) ($cinema['checkin_advance_minutes'] ?? 30)));
+        $timezone = new DateTimeZone('America/Sao_Paulo');
+        $sessionStartsAt = $first ? new DateTimeImmutable($first['starts_at'], $timezone) : null;
+        $checkinOpensAt = $sessionStartsAt ? $sessionStartsAt->modify('-' . $advanceMinutes . ' minutes') : null;
+        $tooEarly = $checkinOpensAt && new DateTimeImmutable('now', $timezone) < $checkinOpensAt;
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            if (!$first) {
+                throw new RuntimeException('Ingresso não encontrado para check-in.');
+            }
+            if ($tooEarly) {
+                header('Location: index.php?route=ticket_validate&token=' . urlencode($rawToken) . '&early=1');
+                exit;
+            }
+            $checkedAt = (new DateTimeImmutable('now', $timezone))->format('Y-m-d H:i:s');
+            $stmt = db()->prepare('UPDATE tickets SET checked_in_at = ?, checked_in_by = ? WHERE (qr_token = ? OR sale_code = ?) AND status = "vendido" AND checked_in_at IS NULL');
+            $stmt->execute([$checkedAt, (int) Auth::user()['id'], $rawToken, $rawToken]);
+            header('Location: index.php?route=ticket_validate&token=' . urlencode($rawToken) . '&checked=' . $stmt->rowCount());
+            exit;
+        }
+
         $alreadyUsed = $first && !empty($first['checked_in_at']);
         $checkedNow = max(0, (int) ($_GET['checked'] ?? 0));
-        layout('Check-in do Ingresso', function () use ($rawToken, $tickets, $first, $alreadyUsed, $checkedNow) {
+        layout('Check-in do Ingresso', function () use ($rawToken, $tickets, $first, $alreadyUsed, $checkedNow, $tooEarly, $checkinOpensAt, $advanceMinutes) {
             ?>
             <div class="section-head">
                 <div>
@@ -1595,9 +1626,14 @@ try {
                     <strong>Check-in já realizado</strong>
                     <span>Entrada registrada em <?= e(date('d/m/Y H:i', strtotime($first['checked_in_at']))) ?>.</span>
                 </section>
+            <?php elseif ($tooEarly): ?>
+                <section class="validation-card waiting">
+                    <strong>Entrada ainda não liberada</strong>
+                    <span>O check-in abre às <?= e($checkinOpensAt->format('H:i')) ?>, <?= $advanceMinutes ?> minutos antes da sessão.</span>
+                </section>
             <?php else: ?>
                 <section class="validation-card valid">
-                    <strong>Ingresso localizado</strong>
+                    <strong>Entrada liberada</strong>
                     <span>Confira filme, sala e horário antes de confirmar o check-in.</span>
                 </section>
             <?php endif; ?>
@@ -1611,14 +1647,17 @@ try {
                         <h2><?= e($first['movie_title']) ?></h2>
                         <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
                         <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
+                        <p class="entry-window"><strong>Entrada:</strong> liberada a partir de <?= e($checkinOpensAt->format('d/m/Y H:i')) ?></p>
                         <p><strong>Poltronas:</strong> <?= e(implode(', ', array_column($tickets, 'seat_code'))) ?></p>
                         <p><strong>Código:</strong> <?= e($first['sale_code']) ?></p>
-                        <?php if (!$alreadyUsed): ?>
+                        <?php if (!$alreadyUsed && !$tooEarly): ?>
                             <form method="post">
                                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                                 <input type="hidden" name="token" value="<?= e($first['qr_token'] ?: $rawToken) ?>">
                                 <button class="button primary">Confirmar check-in</button>
                             </form>
+                        <?php elseif ($tooEarly): ?>
+                            <button class="button" type="button" disabled>Check-in disponível às <?= e($checkinOpensAt->format('H:i')) ?></button>
                         <?php endif; ?>
                     </div>
                 </section>

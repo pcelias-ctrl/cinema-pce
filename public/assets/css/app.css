@@ -738,6 +738,9 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .validation-card.valid { background: #15803d; }
 .validation-card.invalid { background: #dc2626; }
 .validation-card.used { background: #b45309; }
+.validation-card.waiting { background: #2563a8; }
+.entry-policy { display: flex; justify-content: space-between; gap: 12px; padding: 11px 12px; border-left: 4px solid #3c8dbc; background: #eef6fb; color: #245474; }
+.entry-policy span { text-align: right; }
 .validation-detail {
     display: grid;
     grid-template-columns: 110px 1fr;
@@ -755,6 +758,8 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .validation-detail p {
     margin: 0 0 10px;
 }
+.validation-detail .entry-window { padding: 8px 10px; border-left: 3px solid #3c8dbc; background: #eef6fb; color: #245474; }
+.validation-detail button:disabled { cursor: not-allowed; opacity: .65; transform: none; }
 .settings-section { display: grid; gap: 14px; }
 .settings-section h2 { margin-bottom: 0; }
 .settings-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
