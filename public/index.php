@@ -1658,7 +1658,8 @@ try {
 
     $occupancyStmt = db()->prepare(
         "SELECT showtimes.id, showtimes.starts_at, showtimes.audio_type, showtimes.price,
-            movies.title movie_title, rooms.name room_name, rooms.capacity,
+            movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover,
+            rooms.name room_name, rooms.capacity,
             COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) sold,
             COUNT(CASE WHEN tickets.status = 'vendido' AND tickets.checked_in_at IS NOT NULL THEN tickets.id END) checked_in
          FROM showtimes
@@ -1674,8 +1675,7 @@ try {
 
     $hourStmt = db()->prepare(
         "SELECT HOUR(showtimes.starts_at) hour_label,
-            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) tickets,
-            COALESCE(SUM(CASE WHEN tickets.status = 'vendido' THEN tickets.unit_price ELSE 0 END), 0) revenue
+            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) tickets
          FROM showtimes
          LEFT JOIN tickets ON tickets.showtime_id = showtimes.id
          WHERE DATE(showtimes.starts_at) = ?
@@ -1762,17 +1762,17 @@ try {
             </div>
 
             <div class="panel chart-panel">
-                <div class="panel-heading"><div><span class="eyebrow">Performance</span><h2>Vendas por horário</h2></div><span class="chart-legend">Ingressos e receita</span></div>
+                <div class="panel-heading"><div><span class="eyebrow">Fluxo</span><h2>Ingressos por horário</h2></div><span class="chart-legend">Quantidade vendida</span></div>
                 <div class="bar-chart">
                     <?php foreach ($hourRows as $hour): ?>
                         <?php $height = 12 + (((int) $hour['tickets'] / $maxHourTickets) * 88); ?>
                         <div class="bar-column">
-                            <span>R$ <?= e(number_format((float) $hour['revenue'], 0, ',', '.')) ?></span>
+                            <span><?= (int) $hour['tickets'] ?> ing.</span>
                             <i style="height: <?= e($height) ?>%"></i>
                             <b><?= e(str_pad((string) $hour['hour_label'], 2, '0', STR_PAD_LEFT)) ?>h</b>
                         </div>
                     <?php endforeach; ?>
-                    <?php if (!$hourRows): ?><p class="muted">Sem vendas por horário ainda.</p><?php endif; ?>
+                    <?php if (!$hourRows): ?><p class="muted">Sem ingressos por horário ainda.</p><?php endif; ?>
                 </div>
             </div>
         </section>
@@ -1789,6 +1789,11 @@ try {
                     $percent = min(100, round(($sold / $capacity) * 100));
                     ?>
                     <article class="session-tile">
+                        <?php if ($session['has_cover']): ?>
+                            <img class="session-poster" src="index.php?route=movie_cover&id=<?= (int) $session['movie_id'] ?>" alt="">
+                        <?php else: ?>
+                            <div class="session-poster placeholder" aria-hidden="true"></div>
+                        <?php endif; ?>
                         <div class="session-time"><?= e(date('H:i', strtotime($session['starts_at']))) ?></div>
                         <div>
                             <strong><?= e($session['movie_title']) ?></strong>
