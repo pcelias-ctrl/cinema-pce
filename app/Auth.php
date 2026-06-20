@@ -46,6 +46,20 @@ final class Auth
         if (!self::check()) {
             redirect_to('login');
         }
+        static $validatedUserId = 0;
+        $userId = (int) self::user()['id'];
+        if ($validatedUserId === $userId) return;
+        $stmt = Database::connection()->prepare('SELECT name, email, role, active FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$userId]);
+        $user = $stmt->fetch();
+        if (!$user || (int) $user['active'] !== 1) {
+            self::logout();
+            redirect_to('login');
+        }
+        $_SESSION['user']['name'] = $user['name'];
+        $_SESSION['user']['email'] = $user['email'];
+        $_SESSION['user']['role'] = $user['role'];
+        $validatedUserId = $userId;
     }
 
     public static function requireAdmin(): void
@@ -57,4 +71,3 @@ final class Auth
         }
     }
 }
-

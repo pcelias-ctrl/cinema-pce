@@ -626,43 +626,120 @@ try {
 
     if ($route === 'users') {
         Auth::requireAdmin();
+        $formError = '';
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
-            $stmt = db()->prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)');
-            $stmt->execute([
-                trim($_POST['name']),
-                trim($_POST['email']),
-                password_hash($_POST['password'], PASSWORD_DEFAULT),
-                $_POST['role'] === 'administrador' ? 'administrador' : 'vendedor',
-            ]);
-            redirect_to('users');
+            try {
+                $action = $_POST['action'] ?? 'save';
+                $userId = (int) ($_POST['user_id'] ?? 0);
+                if ($action === 'toggle') {
+                    if ($userId === (int) Auth::user()['id']) {
+                        throw new RuntimeException('Você não pode desativar a própria conta.');
+                    }
+                    $targetStmt = db()->prepare('SELECT id, role, active FROM users WHERE id = ?');
+                    $targetStmt->execute([$userId]);
+                    $target = $targetStmt->fetch();
+                    if (!$target) throw new RuntimeException('Usuário não encontrado.');
+                    if ($target['role'] === 'administrador' && (int) $target['active'] === 1) {
+                        $activeAdmins = (int) db()->query("SELECT COUNT(*) FROM users WHERE role = 'administrador' AND active = 1")->fetchColumn();
+                        if ($activeAdmins <= 1) throw new RuntimeException('Mantenha pelo menos um administrador ativo.');
+                    }
+                    db()->prepare('UPDATE users SET active = ? WHERE id = ?')->execute([(int) $target['active'] === 1 ? 0 : 1, $userId]);
+                    redirect_to('users');
+                }
+
+                $name = trim($_POST['name'] ?? '');
+                $email = strtolower(trim($_POST['email'] ?? ''));
+                $password = (string) ($_POST['password'] ?? '');
+                $role = ($_POST['role'] ?? '') === 'administrador' ? 'administrador' : 'vendedor';
+                if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    throw new RuntimeException('Informe um nome e um e-mail válido.');
+                }
+                if ($userId === (int) Auth::user()['id']) $role = 'administrador';
+                $duplicate = db()->prepare('SELECT id FROM users WHERE email = ? AND id <> ? LIMIT 1');
+                $duplicate->execute([$email, $userId]);
+                if ($duplicate->fetch()) throw new RuntimeException('Este e-mail já está cadastrado.');
+
+                if ($userId > 0) {
+                    $currentStmt = db()->prepare('SELECT role, active FROM users WHERE id = ?');
+                    $currentStmt->execute([$userId]);
+                    $currentRecord = $currentStmt->fetch();
+                    if (!$currentRecord) throw new RuntimeException('Usuário não encontrado.');
+                    if ($currentRecord['role'] === 'administrador' && (int) $currentRecord['active'] === 1 && $role !== 'administrador') {
+                        $activeAdmins = (int) db()->query("SELECT COUNT(*) FROM users WHERE role = 'administrador' AND active = 1")->fetchColumn();
+                        if ($activeAdmins <= 1) throw new RuntimeException('Mantenha pelo menos um administrador ativo.');
+                    }
+                    if ($password !== '' && strlen($password) < 6) throw new RuntimeException('A nova senha deve ter pelo menos 6 caracteres.');
+                    if ($password !== '') {
+                        $stmt = db()->prepare('UPDATE users SET name=?, email=?, role=?, password_hash=? WHERE id=?');
+                        $stmt->execute([$name, $email, $role, password_hash($password, PASSWORD_DEFAULT), $userId]);
+                    } else {
+                        $stmt = db()->prepare('UPDATE users SET name=?, email=?, role=? WHERE id=?');
+                        $stmt->execute([$name, $email, $role, $userId]);
+                    }
+                    if ($userId === (int) Auth::user()['id']) {
+                        $_SESSION['user']['name'] = $name;
+                        $_SESSION['user']['email'] = $email;
+                    }
+                } else {
+                    if (strlen($password) < 6) throw new RuntimeException('A senha deve ter pelo menos 6 caracteres.');
+                    $stmt = db()->prepare('INSERT INTO users (name, email, password_hash, role, active) VALUES (?, ?, ?, ?, 1)');
+                    $stmt->execute([$name, $email, password_hash($password, PASSWORD_DEFAULT), $role]);
+                }
+                redirect_to('users');
+            } catch (Throwable $exception) {
+                $formError = $exception->getMessage();
+            }
         }
 
         $users = db()->query('SELECT id, name, email, role, active, created_at FROM users ORDER BY name')->fetchAll();
-        layout('Usuarios', function () use ($users) {
+        $editId = (int) ($_GET['edit_id'] ?? $_POST['user_id'] ?? 0);
+        $editUser = null;
+        if ($editId > 0) {
+            $editStmt = db()->prepare('SELECT id, name, email, role, active FROM users WHERE id = ?');
+            $editStmt->execute([$editId]);
+            $editUser = $editStmt->fetch() ?: null;
+        }
+        $currentUserId = (int) Auth::user()['id'];
+        layout('Usuários', function () use ($users, $editUser, $formError, $currentUserId) {
             ?>
-            <div class="section-head"><h1>Usuarios</h1></div>
+            <div class="section-head"><div><h1>Usuários</h1><p class="muted">Cadastro e controle de acesso ao sistema.</p></div></div>
             <section class="split">
                 <form method="post" class="panel form">
-                    <h2>Novo usuario</h2>
+                    <h2><?= $editUser ? 'Editar usuário' : 'Novo usuário' ?></h2>
+                    <?php if ($formError): ?><p class="alert"><?= e($formError) ?></p><?php endif; ?>
                     <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
-                    <label>Nome<input name="name" required></label>
-                    <label>Email<input name="email" type="email" required></label>
-                    <label>Senha<input name="password" type="password" minlength="6" required></label>
-                    <label>Nivel
-                        <select name="role">
-                            <option value="vendedor">Vendedor de bilhetes</option>
-                            <option value="administrador">Administrador</option>
+                    <input type="hidden" name="action" value="save">
+                    <input type="hidden" name="user_id" value="<?= (int) ($editUser['id'] ?? 0) ?>">
+                    <label>Nome<input name="name" value="<?= e($editUser['name'] ?? '') ?>" required></label>
+                    <label>E-mail<input name="email" type="email" value="<?= e($editUser['email'] ?? '') ?>" required></label>
+                    <label>Senha<input name="password" type="password" minlength="6" <?= $editUser ? 'placeholder="Deixe vazio para manter"' : 'required' ?>></label>
+                    <label>Nível de acesso
+                        <select name="role" <?= $editUser && (int) $editUser['id'] === $currentUserId ? 'disabled' : '' ?>>
+                            <option value="vendedor" <?= ($editUser['role'] ?? 'vendedor') === 'vendedor' ? 'selected' : '' ?>>Vendedor de bilhetes</option>
+                            <option value="administrador" <?= ($editUser['role'] ?? '') === 'administrador' ? 'selected' : '' ?>>Administrador</option>
                         </select>
+                        <?php if ($editUser && (int) $editUser['id'] === $currentUserId): ?><input type="hidden" name="role" value="administrador"><small>Seu próprio acesso administrativo é protegido.</small><?php endif; ?>
                     </label>
-                    <button class="button primary">Salvar</button>
+                    <div class="toolbar"><button class="button primary">Salvar</button><?php if ($editUser): ?><a class="button" href="index.php?route=users">Cancelar</a><?php endif; ?></div>
                 </form>
                 <div class="panel">
                     <table>
-                        <thead><tr><th>Nome</th><th>Email</th><th>Nivel</th></tr></thead>
+                        <thead><tr><th>Nome</th><th>E-mail</th><th>Nível</th><th>Status</th><th>Ações</th></tr></thead>
                         <tbody>
                         <?php foreach ($users as $user): ?>
-                            <tr><td><?= e($user['name']) ?></td><td><?= e($user['email']) ?></td><td><?= e($user['role']) ?></td></tr>
+                            <tr>
+                                <td><strong><?= e($user['name']) ?></strong><?= (int) $user['id'] === $currentUserId ? ' (você)' : '' ?></td>
+                                <td><?= e($user['email']) ?></td>
+                                <td><?= e($user['role'] === 'administrador' ? 'Administrador' : 'Vendedor') ?></td>
+                                <td><span class="status-badge <?= $user['active'] ? 'active' : 'inactive' ?>"><?= $user['active'] ? 'Ativo' : 'Inativo' ?></span></td>
+                                <td><div class="table-actions">
+                                    <a class="button" href="index.php?route=users&edit_id=<?= (int) $user['id'] ?>">Editar</a>
+                                    <?php if ((int) $user['id'] !== $currentUserId): ?>
+                                        <form method="post"><input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="user_id" value="<?= (int) $user['id'] ?>"><button class="button <?= $user['active'] ? 'danger' : 'primary' ?>"><?= $user['active'] ? 'Desativar' : 'Ativar' ?></button></form>
+                                    <?php endif; ?>
+                                </div></td>
+                            </tr>
                         <?php endforeach; ?>
                         </tbody>
                     </table>
