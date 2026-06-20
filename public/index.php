@@ -1324,17 +1324,7 @@ try {
         layout('Venda', function () use ($showtime, $seats, $screen) {
             ?>
             <div class="section-head sale-head">
-                <div class="sale-title-strip">
-                    <span class="eyebrow">Venda de ingressos</span>
-                    <h1><?= e($showtime['movie_title']) ?></h1>
-                    <div class="sale-meta">
-                        <span><?= e($showtime['room_name']) ?></span>
-                        <span><?= e(ucfirst($showtime['audio_type'])) ?></span>
-                        <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?></span>
-                        <span>Inteira R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></span>
-                        <span>Meia R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></span>
-                    </div>
-                </div>
+                <h1><?= e($showtime['movie_title']) ?></h1>
                 <div class="sale-head-actions">
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
@@ -1343,11 +1333,6 @@ try {
                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                 <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
                 <section class="panel sale-map-panel">
-                    <div class="ticket-type-toolbar" role="group" aria-label="Tipo do ingresso para as próximas poltronas">
-                        <span>Tipo das próximas poltronas</span>
-                        <label><input type="radio" name="active_ticket_type" value="inteira" checked><b>Inteira</b><small>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></small></label>
-                        <label><input type="radio" name="active_ticket_type" value="meia"><b>Meia</b><small>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></small></label>
-                    </div>
                     <div class="sale-map" aria-label="Mapa de poltronas">
                         <div class="sale-screen" style="left:<?= e(((float) ($screen['x'] ?? 270) / 1040) * 100) ?>%;top:<?= e(((float) ($screen['y'] ?? 28) / 620) * 100) ?>%;width:<?= e(((float) ($screen['w'] ?? 500) / 1040) * 100) ?>%;height:<?= e(((float) ($screen['h'] ?? 34) / 620) * 100) ?>%;">TELA</div>
                         <?php foreach ($seats as $seat): ?>
@@ -1361,27 +1346,38 @@ try {
                             </label>
                         <?php endforeach; ?>
                     </div>
+                </section>
+                <aside class="panel sale-side-panel">
+                    <div class="sale-session-info">
+                        <span class="eyebrow">Venda de ingressos</span>
+                        <strong><?= e($showtime['room_name']) ?></strong>
+                        <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(ucfirst($showtime['audio_type'])) ?></span>
+                    </div>
                     <div class="legend">
                         <span><i class="free"></i>Disponível</span>
                         <span><i class="selected"></i>Selecionada</span>
                         <span><i class="sold"></i>Ocupada</span>
                     </div>
-                </section>
-                <aside class="panel sale-summary">
-                    <h2>Resumo</h2>
-                    <p class="summary-item">Poltronas <strong id="selected-seats">Nenhuma</strong></p>
-                    <p class="summary-item total">Total <strong id="sale-total">R$ 0,00</strong></p>
-                    <label>Nome do cliente<input name="buyer_name" placeholder="Opcional"></label>
-                    <label>Forma de pagamento
-                        <select name="payment_method" id="payment-method">
-                            <option value="dinheiro">Dinheiro</option>
-                            <option value="cartao">Cartão</option>
-                            <option value="pix">Pix</option>
-                        </select>
-                    </label>
-                    <label id="amount-paid-row">Valor recebido<input name="amount_paid" id="amount-paid" inputmode="decimal" placeholder="Ex: 50,00"></label>
-                    <p class="summary-item" id="change-row">Troco <strong id="sale-change">R$ 0,00</strong></p>
-                    <button class="button primary" id="finish-sale" disabled>Finalizar venda</button>
+                    <div class="sale-summary">
+                        <p class="summary-item">Poltronas <strong id="selected-seats">Nenhuma</strong></p>
+                        <p class="summary-item total">Total <strong id="sale-total">R$ 0,00</strong></p>
+                        <label>Nome do cliente<input name="buyer_name" placeholder="Opcional"></label>
+                        <label>Forma de pagamento
+                            <select name="payment_method" id="payment-method">
+                                <option value="dinheiro">Dinheiro</option>
+                                <option value="cartao">Cartão</option>
+                                <option value="pix">Pix</option>
+                            </select>
+                        </label>
+                        <label id="amount-paid-row">Valor recebido<input name="amount_paid" id="amount-paid" inputmode="decimal" placeholder="Ex: 50,00"></label>
+                        <p class="summary-item" id="change-row">Troco <strong id="sale-change">R$ 0,00</strong></p>
+                    </div>
+                    <div class="ticket-type-toolbar" role="group" aria-label="Tipo do ingresso para as próximas poltronas">
+                        <span>Próximas poltronas</span>
+                        <label><input type="radio" name="active_ticket_type" value="inteira" checked><b>Inteira</b><small>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></small></label>
+                        <label><input type="radio" name="active_ticket_type" value="meia"><b>Meia</b><small>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></small></label>
+                    </div>
+                    <button class="button primary finish-sale" id="finish-sale" disabled>Finalizar venda</button>
                 </aside>
             </form>
             <script src="assets/js/sale.js"></script>
@@ -1465,7 +1461,7 @@ try {
             </style>
         </head>
         <body>
-            <div class="actions"><button onclick="window.print()">Imprimir / salvar PDF</button></div>
+            <div class="actions"><button id="print-tickets" type="button">Imprimir / salvar PDF</button></div>
             <?php foreach ($tickets as $ticket): ?>
                 <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
                 <main class="receipt">
@@ -1492,6 +1488,16 @@ try {
             <?php endforeach; ?>
             <script src="assets/js/vendor/qrcode.min.js"></script>
             <script src="assets/js/ticket-qr.js"></script>
+            <script>
+                document.getElementById('print-tickets').addEventListener('click', async function () {
+                    this.disabled = true;
+                    this.textContent = 'Preparando QR Codes...';
+                    await (window.ticketQrReady || Promise.resolve());
+                    this.disabled = false;
+                    this.textContent = 'Imprimir / salvar PDF';
+                    window.print();
+                });
+            </script>
         </body>
         </html>
         <?php
