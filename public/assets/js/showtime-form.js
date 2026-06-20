@@ -4,6 +4,18 @@
     const addButton = document.getElementById('add-showtime');
     const list = document.getElementById('showtime-list');
     const form = document.getElementById('showtime-form');
+    const fullPrice = form.querySelector('input[name="price"]');
+    const halfPrice = form.querySelector('input[name="half_price"]');
+    let halfPriceEdited = halfPrice.value.trim() !== '';
+
+    fullPrice.addEventListener('input', () => {
+        if (halfPriceEdited) return;
+        const value = parseFloat(fullPrice.value.replace(/\./g, '').replace(',', '.'));
+        halfPrice.value = Number.isFinite(value) && value > 0 ? (value / 2).toFixed(2).replace('.', ',') : '';
+    });
+    halfPrice.addEventListener('input', () => {
+        halfPriceEdited = halfPrice.value.trim() !== '';
+    });
 
     function formatDateTime(value) {
         const [date, time] = value.split('T');

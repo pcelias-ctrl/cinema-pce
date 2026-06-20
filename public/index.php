@@ -332,6 +332,7 @@ function encrypt_setting(string $value): string
 
 function sale_tickets(string $saleCode): array
 {
+    ensure_ticket_pricing_columns();
     $stmt = db()->prepare(
         'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
          FROM tickets
@@ -344,6 +345,33 @@ function sale_tickets(string $saleCode): array
     );
     $stmt->execute([$saleCode]);
     return $stmt->fetchAll();
+}
+
+function ticket_seats_by_type(array $tickets): array
+{
+    $seats = ['inteira' => [], 'meia' => []];
+    foreach ($tickets as $ticket) {
+        $type = ($ticket['ticket_type'] ?? 'inteira') === 'meia' ? 'meia' : 'inteira';
+        $seats[$type][] = $ticket['seat_code'];
+    }
+    return $seats;
+}
+
+function ensure_ticket_pricing_columns(): void
+{
+    static $ready = false;
+    if ($ready) return;
+
+    $halfPrice = db()->query("SHOW COLUMNS FROM showtimes LIKE 'half_price'")->fetch();
+    if (!$halfPrice) {
+        db()->exec('ALTER TABLE showtimes ADD COLUMN half_price DECIMAL(10,2) NULL AFTER price');
+    }
+    db()->exec('UPDATE showtimes SET half_price = ROUND(price / 2, 2) WHERE half_price IS NULL');
+    $ticketType = db()->query("SHOW COLUMNS FROM tickets LIKE 'ticket_type'")->fetch();
+    if (!$ticketType) {
+        db()->exec("ALTER TABLE tickets ADD COLUMN ticket_type ENUM('inteira','meia') NOT NULL DEFAULT 'inteira' AFTER payment_method");
+    }
+    $ready = true;
 }
 
 function open_cash_register(?int $userId = null): ?array
@@ -437,6 +465,10 @@ try {
     }
 
     Auth::requireLogin();
+
+    if (in_array($route, ['showtimes', 'showtime_new', 'showtime_edit', 'sales', 'sale_new'], true)) {
+        ensure_ticket_pricing_columns();
+    }
 
     if (($route === 'dashboard' || $route === '') && Auth::user()['role'] !== 'administrador') {
         redirect_to('sales');
@@ -845,7 +877,7 @@ try {
             </form>
             <div class="panel">
                 <table>
-                    <thead><tr><th>Filme</th><th>Sala</th><th>Áudio</th><th>Data e horário</th><th>Valor</th><th>Status</th><th></th></tr></thead>
+                    <thead><tr><th>Filme</th><th>Sala</th><th>Áudio</th><th>Data e horário</th><th>Inteira</th><th>Meia</th><th>Status</th><th></th></tr></thead>
                     <tbody>
                     <?php $currentGroup = null; ?>
                     <?php foreach ($showtimes as $showtime): ?>
@@ -861,7 +893,7 @@ try {
                         if ($groupLabel !== '' && $groupLabel !== $currentGroup):
                             $currentGroup = $groupLabel;
                         ?>
-                            <tr class="group-row"><td colspan="7"><?= e($groupLabel) ?></td></tr>
+                            <tr class="group-row"><td colspan="8"><?= e($groupLabel) ?></td></tr>
                         <?php endif; ?>
                         <tr>
                             <td>
@@ -874,12 +906,13 @@ try {
                             <td><?= e(ucfirst($showtime['audio_type'])) ?></td>
                             <td><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?></td>
                             <td>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></td>
+                            <td>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></td>
                             <td><?= e($showtime['status']) ?></td>
                             <td><a href="index.php?route=showtime_edit&id=<?= (int) $showtime['id'] ?>">Editar</a></td>
                         </tr>
                     <?php endforeach; ?>
                     <?php if (!$showtimes): ?>
-                        <tr><td colspan="7">Nenhuma sessão cadastrada.</td></tr>
+                        <tr><td colspan="8">Nenhuma sessão cadastrada.</td></tr>
                     <?php endif; ?>
                     </tbody>
                 </table>
@@ -893,7 +926,7 @@ try {
         Auth::requireAdmin();
         $movies = db()->query('SELECT id, title FROM movies WHERE active = 1 ORDER BY title')->fetchAll();
         $rooms = db()->query('SELECT id, name FROM rooms WHERE active = 1 ORDER BY name')->fetchAll();
-        $showtime = ['movie_id' => '', 'room_id' => '', 'audio_type' => 'dublado', 'starts_at' => '', 'price' => '', 'status' => 'programada'];
+        $showtime = ['movie_id' => '', 'room_id' => '', 'audio_type' => 'dublado', 'starts_at' => '', 'price' => '', 'half_price' => '', 'status' => 'programada'];
 
         if ($route === 'showtime_edit') {
             $stmt = db()->prepare('SELECT * FROM showtimes WHERE id = ?');
@@ -908,6 +941,10 @@ try {
             $roomId = (int) ($_POST['room_id'] ?? 0);
             $audioType = ($_POST['audio_type'] ?? 'dublado') === 'legendado' ? 'legendado' : 'dublado';
             $price = money_to_decimal($_POST['price'] ?? '0');
+            $halfPrice = money_to_decimal($_POST['half_price'] ?? '0');
+            if ($price <= 0 || $halfPrice <= 0) {
+                throw new RuntimeException('Informe os valores da inteira e da meia-entrada.');
+            }
             $status = in_array($_POST['status'] ?? 'programada', ['programada', 'cancelada', 'encerrada'], true) ? $_POST['status'] : 'programada';
 
             $starts = $_POST['starts_at'] ?? [];
@@ -921,18 +958,18 @@ try {
             }
 
             if ($route === 'showtime_new') {
-                $stmt = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, price, status) VALUES (?, ?, ?, ?, ?, ?)');
+                $stmt = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
                 foreach ($starts as $startsAt) {
-                    $stmt->execute([$movieId, $roomId, $startsAt, $audioType, $price, $status]);
+                    $stmt->execute([$movieId, $roomId, $startsAt, $audioType, $price, $halfPrice, $status]);
                 }
             } else {
-                $stmt = db()->prepare('UPDATE showtimes SET movie_id=?, room_id=?, starts_at=?, audio_type=?, price=?, status=? WHERE id=?');
-                $stmt->execute([$movieId, $roomId, $starts[0], $audioType, $price, $status, (int) $_GET['id']]);
+                $stmt = db()->prepare('UPDATE showtimes SET movie_id=?, room_id=?, starts_at=?, audio_type=?, price=?, half_price=?, status=? WHERE id=?');
+                $stmt->execute([$movieId, $roomId, $starts[0], $audioType, $price, $halfPrice, $status, (int) $_GET['id']]);
 
                 if (count($starts) > 1) {
-                    $insert = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, price, status) VALUES (?, ?, ?, ?, ?, ?)');
+                    $insert = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?)');
                     foreach (array_slice($starts, 1) as $startsAt) {
-                        $insert->execute([$movieId, $roomId, $startsAt, $audioType, $price, $status]);
+                        $insert->execute([$movieId, $roomId, $startsAt, $audioType, $price, $halfPrice, $status]);
                     }
                 }
             }
@@ -972,7 +1009,8 @@ try {
                             <option value="legendado" <?= $showtime['audio_type'] === 'legendado' ? 'selected' : '' ?>>Legendado</option>
                         </select>
                     </label>
-                    <label>Valor do ingresso<input name="price" inputmode="decimal" placeholder="Ex: 25,00" value="<?= e($showtime['price'] !== '' ? number_format((float) $showtime['price'], 2, ',', '.') : '') ?>" required></label>
+                    <label>Valor inteira<input name="price" inputmode="decimal" placeholder="Ex: 30,00" value="<?= e($showtime['price'] !== '' ? number_format((float) $showtime['price'], 2, ',', '.') : '') ?>" required></label>
+                    <label>Valor meia<input name="half_price" inputmode="decimal" placeholder="Ex: 15,00" value="<?= e($showtime['half_price'] !== '' ? number_format((float) $showtime['half_price'], 2, ',', '.') : '') ?>" required></label>
                     <label>Status
                         <select name="status">
                             <option value="programada" <?= $showtime['status'] === 'programada' ? 'selected' : '' ?>>Programada</option>
@@ -1152,7 +1190,7 @@ try {
                         <div>
                             <h2><?= e($showtime['movie_title']) ?></h2>
                             <p><?= e($showtime['room_name']) ?> | <?= e(ucfirst($showtime['audio_type'])) ?> | <?= e(date('H:i', strtotime($showtime['starts_at']))) ?></p>
-                            <p>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></p>
+                            <p>Inteira R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?> | Meia R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></p>
                             <a class="button primary" href="<?= $cash ? 'index.php?route=sale_new&showtime_id=' . (int) $showtime['id'] : 'index.php?route=cash_register' ?>">Vender</a>
                         </div>
                     </article>
@@ -1204,8 +1242,16 @@ try {
 
             $buyerName = trim($_POST['buyer_name'] ?? '');
             $amountPaid = money_to_decimal($_POST['amount_paid'] ?? '0');
-            $unitPrice = (float) $showtime['price'];
-            $totalAmount = $unitPrice * count($seatIds);
+            $seatTypes = is_array($_POST['seat_types'] ?? null) ? $_POST['seat_types'] : [];
+            $fullPrice = (float) $showtime['price'];
+            $halfPrice = (float) ($showtime['half_price'] ?? ($fullPrice / 2));
+            $ticketTypes = [];
+            $totalAmount = 0.0;
+            foreach ($seatIds as $seatId) {
+                $ticketType = ($seatTypes[$seatId] ?? 'inteira') === 'meia' ? 'meia' : 'inteira';
+                $ticketTypes[$seatId] = $ticketType;
+                $totalAmount += $ticketType === 'meia' ? $halfPrice : $fullPrice;
+            }
             $changeAmount = $paymentMethod === 'dinheiro' ? max(0, $amountPaid - $totalAmount) : 0;
             if ($paymentMethod === 'dinheiro' && $amountPaid < $totalAmount) {
                 throw new RuntimeException('Valor recebido em dinheiro é menor que o total da venda.');
@@ -1235,10 +1281,12 @@ try {
             $code = sale_code();
             $qrToken = ticket_token();
             $insert = db()->prepare(
-                'INSERT INTO tickets (showtime_id, room_seat_id, seller_user_id, cash_register_id, sale_code, qr_token, buyer_name, payment_method, unit_price, total_amount, amount_paid, change_amount, status, sold_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "vendido", NOW())'
+                'INSERT INTO tickets (showtime_id, room_seat_id, seller_user_id, cash_register_id, sale_code, qr_token, buyer_name, payment_method, ticket_type, unit_price, total_amount, amount_paid, change_amount, status, sold_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "vendido", NOW())'
             );
             foreach ($availableSeats as $seat) {
+                $ticketType = $ticketTypes[(int) $seat['id']] ?? 'inteira';
+                $unitPrice = $ticketType === 'meia' ? $halfPrice : $fullPrice;
                 $insert->execute([
                     $showtimeId,
                     (int) $seat['id'],
@@ -1248,6 +1296,7 @@ try {
                     $qrToken,
                     $buyerName ?: null,
                     $paymentMethod,
+                    $ticketType,
                     $unitPrice,
                     $totalAmount,
                     $paymentMethod === 'dinheiro' ? $amountPaid : $totalAmount,
@@ -1282,17 +1331,23 @@ try {
                         <span><?= e($showtime['room_name']) ?></span>
                         <span><?= e(ucfirst($showtime['audio_type'])) ?></span>
                         <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?></span>
-                        <span>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></span>
+                        <span>Inteira R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></span>
+                        <span>Meia R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></span>
                     </div>
                 </div>
                 <div class="sale-head-actions">
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
             </div>
-            <form method="post" class="sale-layout sale-workbench" id="sale-form" data-price="<?= e($showtime['price']) ?>">
+            <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>">
                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                 <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
                 <section class="panel sale-map-panel">
+                    <div class="ticket-type-toolbar" role="group" aria-label="Tipo do ingresso para as próximas poltronas">
+                        <span>Tipo das próximas poltronas</span>
+                        <label><input type="radio" name="active_ticket_type" value="inteira" checked><b>Inteira</b><small>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></small></label>
+                        <label><input type="radio" name="active_ticket_type" value="meia"><b>Meia</b><small>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></small></label>
+                    </div>
                     <div class="sale-map" aria-label="Mapa de poltronas">
                         <div class="sale-screen" style="left:<?= e(((float) ($screen['x'] ?? 270) / 1040) * 100) ?>%;top:<?= e(((float) ($screen['y'] ?? 28) / 620) * 100) ?>%;width:<?= e(((float) ($screen['w'] ?? 500) / 1040) * 100) ?>%;height:<?= e(((float) ($screen['h'] ?? 34) / 620) * 100) ?>%;">TELA</div>
                         <?php foreach ($seats as $seat): ?>
@@ -1302,6 +1357,7 @@ try {
                                 title="<?= e($seat['seat_code']) ?>">
                                 <input type="checkbox" name="seat_ids[]" value="<?= (int) $seat['id'] ?>" <?= $sold ? 'disabled' : '' ?>>
                                 <span><?= e($seat['seat_code']) ?></span>
+                                <input class="seat-ticket-type" type="hidden" name="seat_types[<?= (int) $seat['id'] ?>]" value="inteira" disabled>
                             </label>
                         <?php endforeach; ?>
                     </div>
@@ -1342,9 +1398,10 @@ try {
             throw new RuntimeException('Venda não encontrada.');
         }
         $first = $tickets[0];
+        $seatsByType = ticket_seats_by_type($tickets);
         $validationUrl = app_url('ticket_validate', ['token' => $first['qr_token'] ?: $first['sale_code']]);
         $cinema = cinema_settings();
-        layout('Ingresso', function () use ($tickets, $first, $validationUrl, $cinema) {
+        layout('Ingresso', function () use ($tickets, $first, $seatsByType, $validationUrl, $cinema) {
             ?>
             <div class="section-head no-print">
                 <h1>Ingresso emitido</h1>
@@ -1360,7 +1417,8 @@ try {
                 <p><strong>Filme:</strong> <?= e($first['movie_title']) ?></p>
                 <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
                 <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
-                <p><strong>Poltronas:</strong> <?= e(implode(', ', array_column($tickets, 'seat_code'))) ?></p>
+                <?php if ($seatsByType['inteira']): ?><p><strong>Inteira:</strong> <?= e(implode(', ', $seatsByType['inteira'])) ?></p><?php endif; ?>
+                <?php if ($seatsByType['meia']): ?><p><strong>Meia:</strong> <?= e(implode(', ', $seatsByType['meia'])) ?></p><?php endif; ?>
                 <p><strong>Pagamento:</strong> <?= e(ucfirst($first['payment_method'])) ?></p>
                 <p><strong>Total:</strong> R$ <?= e(number_format((float) $first['total_amount'], 2, ',', '.')) ?></p>
                 <?php if ($first['payment_method'] === 'dinheiro'): ?>
@@ -1389,6 +1447,7 @@ try {
             exit('Venda não encontrada.');
         }
         $first = $tickets[0];
+        $seatsByType = ticket_seats_by_type($tickets);
         $cinema = cinema_settings();
         $validationUrl = app_url('ticket_validate', ['token' => $first['qr_token'] ?: $first['sale_code']]);
         ?>
@@ -1426,7 +1485,8 @@ try {
                 <p><strong>Filme:</strong> <?= e($first['movie_title']) ?></p>
                 <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
                 <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
-                <p><strong>Poltronas:</strong> <?= e(implode(', ', array_column($tickets, 'seat_code'))) ?></p>
+                <?php if ($seatsByType['inteira']): ?><p><strong>Inteira:</strong> <?= e(implode(', ', $seatsByType['inteira'])) ?></p><?php endif; ?>
+                <?php if ($seatsByType['meia']): ?><p><strong>Meia:</strong> <?= e(implode(', ', $seatsByType['meia'])) ?></p><?php endif; ?>
                 <p><strong>Pagamento:</strong> <?= e(ucfirst($first['payment_method'])) ?></p>
                 <p><strong>Total:</strong> R$ <?= e(number_format((float) $first['total_amount'], 2, ',', '.')) ?></p>
                 <?php if ($first['payment_method'] === 'dinheiro'): ?>
@@ -1661,7 +1721,8 @@ try {
             movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover,
             rooms.name room_name, rooms.capacity,
             COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) sold,
-            COUNT(CASE WHEN tickets.status = 'vendido' AND tickets.checked_in_at IS NOT NULL THEN tickets.id END) checked_in
+            COUNT(CASE WHEN tickets.status = 'vendido' AND tickets.checked_in_at IS NOT NULL THEN tickets.id END) checked_in,
+            COALESCE(SUM(CASE WHEN tickets.status = 'vendido' THEN tickets.unit_price ELSE 0 END), 0) revenue
          FROM showtimes
          INNER JOIN movies ON movies.id = showtimes.movie_id
          INNER JOIN rooms ON rooms.id = showtimes.room_id
@@ -1801,7 +1862,7 @@ try {
                         </div>
                         <div class="mini-meter"><i style="width: <?= e($percent) ?>%"></i></div>
                         <small><?= $sold ?> vendidos | <?= $checkedIn ?> check-ins | <?= $remaining ?> aguardando</small>
-                        <small>R$ <?= e(number_format($sold * (float) $session['price'], 2, ',', '.')) ?></small>
+                        <small>R$ <?= e(number_format((float) $session['revenue'], 2, ',', '.')) ?></small>
                     </article>
                 <?php endforeach; ?>
                 <?php if (!$sessionRows): ?><p class="muted">A grade aparece assim que houver sessões para a data selecionada.</p><?php endif; ?>

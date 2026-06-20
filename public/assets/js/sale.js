@@ -1,6 +1,7 @@
 (function () {
     const form = document.getElementById('sale-form');
-    const price = parseFloat(form.dataset.price || '0');
+    const fullPrice = parseFloat(form.dataset.fullPrice || '0');
+    const halfPrice = parseFloat(form.dataset.halfPrice || '0');
     const seatsLabel = document.getElementById('selected-seats');
     const totalLabel = document.getElementById('sale-total');
     const method = document.getElementById('payment-method');
@@ -23,13 +24,31 @@
     }
 
     function selectedSeats() {
-        return [...form.querySelectorAll('.sale-seat input:checked')];
+        return [...form.querySelectorAll('.sale-seat input[type="checkbox"]:checked')];
+    }
+
+    function activeTicketType() {
+        return form.querySelector('input[name="active_ticket_type"]:checked')?.value === 'meia' ? 'meia' : 'inteira';
+    }
+
+    function setSeatType(input, type) {
+        const seat = input.closest('.sale-seat');
+        const hidden = seat.querySelector('.seat-ticket-type');
+        const normalized = type === 'meia' ? 'meia' : 'inteira';
+        input.dataset.ticketType = normalized;
+        hidden.value = normalized;
+        hidden.disabled = !input.checked;
+        seat.classList.toggle('selected-half', input.checked && normalized === 'meia');
+        seat.classList.toggle('selected-full', input.checked && normalized === 'inteira');
     }
 
     function update() {
         const selected = selectedSeats();
-        const total = selected.length * price;
-        const seatCodes = selected.map((input) => input.closest('.sale-seat').querySelector('span').textContent);
+        const total = selected.reduce((sum, input) => sum + (input.dataset.ticketType === 'meia' ? halfPrice : fullPrice), 0);
+        const seatCodes = selected.map((input) => {
+            const code = input.closest('.sale-seat').querySelector('span').textContent;
+            return `${code} (${input.dataset.ticketType === 'meia' ? 'M' : 'I'})`;
+        });
         seatsLabel.textContent = seatCodes.length ? seatCodes.join(', ') : 'Nenhuma';
         totalLabel.textContent = money(total);
 
@@ -41,8 +60,14 @@
         finishButton.disabled = selected.length === 0 || (isCash && paid < total);
     }
 
+    form.querySelectorAll('.sale-seat input[type="checkbox"]').forEach((input) => {
+        input.addEventListener('change', () => {
+            if (input.checked) setSeatType(input, activeTicketType());
+            else setSeatType(input, input.dataset.ticketType || 'inteira');
+            update();
+        });
+    });
     form.addEventListener('change', update);
     form.addEventListener('input', update);
     update();
 })();
-
