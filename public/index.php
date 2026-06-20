@@ -1323,12 +1323,6 @@ try {
 
         layout('Venda', function () use ($showtime, $seats, $screen) {
             ?>
-            <div class="section-head sale-head">
-                <h1><?= e($showtime['movie_title']) ?></h1>
-                <div class="sale-head-actions">
-                    <a class="button" href="index.php?route=sales">Trocar sessão</a>
-                </div>
-            </div>
             <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>">
                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                 <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
@@ -1350,6 +1344,7 @@ try {
                 <aside class="panel sale-side-panel">
                     <div class="sale-session-info">
                         <span class="eyebrow">Venda de ingressos</span>
+                        <h1><?= e($showtime['movie_title']) ?></h1>
                         <strong><?= e($showtime['room_name']) ?></strong>
                         <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(ucfirst($showtime['audio_type'])) ?></span>
                     </div>
@@ -1361,7 +1356,6 @@ try {
                     <div class="sale-summary">
                         <p class="summary-item">Poltronas <strong id="selected-seats">Nenhuma</strong></p>
                         <p class="summary-item total">Total <strong id="sale-total">R$ 0,00</strong></p>
-                        <label>Nome do cliente<input name="buyer_name" placeholder="Opcional"></label>
                         <label>Forma de pagamento
                             <select name="payment_method" id="payment-method">
                                 <option value="dinheiro">Dinheiro</option>
@@ -1372,13 +1366,16 @@ try {
                         <label id="amount-paid-row">Valor recebido<input name="amount_paid" id="amount-paid" inputmode="decimal" placeholder="Ex: 50,00"></label>
                         <p class="summary-item" id="change-row">Troco <strong id="sale-change">R$ 0,00</strong></p>
                     </div>
-                    <div class="ticket-type-toolbar" role="group" aria-label="Tipo do ingresso para as próximas poltronas">
-                        <span>Próximas poltronas</span>
-                        <label><input type="radio" name="active_ticket_type" value="inteira" checked><b>Inteira</b><small>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></small></label>
-                        <label><input type="radio" name="active_ticket_type" value="meia"><b>Meia</b><small>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></small></label>
-                    </div>
                     <button class="button primary finish-sale" id="finish-sale" disabled>Finalizar venda</button>
                 </aside>
+                <footer class="panel sale-footer">
+                    <div class="ticket-type-toolbar" role="group" aria-label="Tipo do ingresso para as próximas poltronas">
+                        <span>Próximas poltronas</span>
+                        <label><input type="radio" name="active_ticket_type" value="meia" checked><b>Meia</b><small>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></small></label>
+                        <label><input type="radio" name="active_ticket_type" value="inteira"><b>Inteira</b><small>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></small></label>
+                    </div>
+                    <a class="button" href="index.php?route=sales">Trocar sessão</a>
+                </footer>
             </form>
             <script src="assets/js/sale.js"></script>
             <?php
