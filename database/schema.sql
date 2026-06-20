@@ -59,6 +59,32 @@ CREATE TABLE movies (
     INDEX idx_movies_filter (genre, active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE product_categories (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    parent_id INT UNSIGNED NULL,
+    name VARCHAR(120) NOT NULL,
+    icon VARCHAR(50) NOT NULL DEFAULT 'package',
+    sort_order SMALLINT NOT NULL DEFAULT 0,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_product_categories_parent FOREIGN KEY (parent_id) REFERENCES product_categories(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE products (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    category_id INT UNSIGNED NOT NULL,
+    name VARCHAR(160) NOT NULL,
+    sku VARCHAR(60) NULL UNIQUE,
+    price DECIMAL(10,2) NOT NULL,
+    stock_quantity INT NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_products_category_active (category_id, active),
+    CONSTRAINT fk_products_category FOREIGN KEY (category_id) REFERENCES product_categories(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE rooms (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -150,4 +176,35 @@ CREATE TABLE tickets (
     CONSTRAINT fk_tickets_seller FOREIGN KEY (seller_user_id) REFERENCES users(id),
     CONSTRAINT fk_tickets_cash_register FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id),
     CONSTRAINT fk_tickets_checked_in_by FOREIGN KEY (checked_in_by) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE product_sales (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    sale_code VARCHAR(40) NOT NULL,
+    seller_user_id INT UNSIGNED NOT NULL,
+    cash_register_id INT UNSIGNED NULL,
+    payment_method ENUM('dinheiro', 'cartao', 'pix') NOT NULL,
+    total_amount DECIMAL(10,2) NOT NULL,
+    sold_at DATETIME NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_product_sales_code (sale_code),
+    INDEX idx_product_sales_sold_at (sold_at),
+    CONSTRAINT fk_product_sales_seller FOREIGN KEY (seller_user_id) REFERENCES users(id),
+    CONSTRAINT fk_product_sales_cash FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE product_sale_items (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    product_sale_id INT UNSIGNED NOT NULL,
+    product_id INT UNSIGNED NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    qr_token VARCHAR(80) NOT NULL UNIQUE,
+    status ENUM('pendente', 'entregue', 'cancelado') NOT NULL DEFAULT 'pendente',
+    delivered_at DATETIME NULL,
+    delivered_by INT UNSIGNED NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_product_items_status (status),
+    CONSTRAINT fk_product_items_sale FOREIGN KEY (product_sale_id) REFERENCES product_sales(id),
+    CONSTRAINT fk_product_items_product FOREIGN KEY (product_id) REFERENCES products(id),
+    CONSTRAINT fk_product_items_delivered_by FOREIGN KEY (delivered_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

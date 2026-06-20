@@ -66,14 +66,18 @@ function layout(string $title, callable $content): void
                                 <li class="nav-item"><a class="nav-link <?= $navClass('movies') ?>" href="index.php?route=movies"><i></i><p>Filmes</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('rooms') ?>" href="index.php?route=rooms"><i></i><p>Salas</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('showtimes') ?>" href="index.php?route=showtimes"><i></i><p>Sessões</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('product_categories') ?>" href="index.php?route=product_categories"><i></i><p>Categorias</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('products') ?>" href="index.php?route=products"><i></i><p>Produtos</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('cinema_settings') ?>" href="index.php?route=cinema_settings"><i></i><p>Cinema</p></a></li>
                             <?php endif; ?>
                             <li class="nav-header">OPERAÇÃO</li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Check-in QR</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['product_pickup', 'product_pickup_lookup'], true) ? 'active' : '' ?>" href="index.php?route=product_pickup"><i></i><p>Retira de Produtos</p></a></li>
                             <?php if ($user['role'] === 'administrador'): ?>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('users') ?>" href="index.php?route=users"><i></i><p>Usuários</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= $navClass('product_report') ?>" href="index.php?route=product_report"><i></i><p>Relatório de Produtos</p></a></li>
                             <?php endif; ?>
                             <li class="nav-item logout-link"><a class="nav-link" href="index.php?route=logout"><i></i><p>Sair</p></a></li>
                         </ul>
@@ -91,6 +95,8 @@ function layout(string $title, callable $content): void
           </div>
         </main>
         <script src="assets/vendor/adminlte/js/adminlte.min.js"></script>
+        <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+        <script>if (window.lucide) window.lucide.createIcons();</script>
       </div>
     </body>
     </html>
@@ -416,6 +422,46 @@ function ensure_ticket_pricing_columns(): void
     $ready = true;
 }
 
+function ensure_product_tables(): void
+{
+    static $ready = false;
+    if ($ready) return;
+    db()->exec("CREATE TABLE IF NOT EXISTS product_categories (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, parent_id INT UNSIGNED NULL, name VARCHAR(120) NOT NULL,
+        icon VARCHAR(50) NOT NULL DEFAULT 'package', sort_order SMALLINT NOT NULL DEFAULT 0, active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        CONSTRAINT fk_product_categories_parent FOREIGN KEY (parent_id) REFERENCES product_categories(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    db()->exec("CREATE TABLE IF NOT EXISTS products (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, category_id INT UNSIGNED NOT NULL, name VARCHAR(160) NOT NULL,
+        sku VARCHAR(60) NULL UNIQUE, price DECIMAL(10,2) NOT NULL, stock_quantity INT NULL, active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_products_category_active (category_id, active), CONSTRAINT fk_products_category FOREIGN KEY (category_id) REFERENCES product_categories(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    db()->exec("CREATE TABLE IF NOT EXISTS product_sales (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, sale_code VARCHAR(40) NOT NULL, seller_user_id INT UNSIGNED NOT NULL,
+        cash_register_id INT UNSIGNED NULL, payment_method ENUM('dinheiro','cartao','pix') NOT NULL, total_amount DECIMAL(10,2) NOT NULL,
+        sold_at DATETIME NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_product_sales_code (sale_code),
+        INDEX idx_product_sales_sold_at (sold_at), CONSTRAINT fk_product_sales_seller FOREIGN KEY (seller_user_id) REFERENCES users(id),
+        CONSTRAINT fk_product_sales_cash FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    db()->exec("CREATE TABLE IF NOT EXISTS product_sale_items (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY, product_sale_id INT UNSIGNED NOT NULL, product_id INT UNSIGNED NOT NULL,
+        unit_price DECIMAL(10,2) NOT NULL, qr_token VARCHAR(80) NOT NULL UNIQUE,
+        status ENUM('pendente','entregue','cancelado') NOT NULL DEFAULT 'pendente', delivered_at DATETIME NULL, delivered_by INT UNSIGNED NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_product_items_status (status),
+        CONSTRAINT fk_product_items_sale FOREIGN KEY (product_sale_id) REFERENCES product_sales(id),
+        CONSTRAINT fk_product_items_product FOREIGN KEY (product_id) REFERENCES products(id),
+        CONSTRAINT fk_product_items_delivered_by FOREIGN KEY (delivered_by) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $count = (int) db()->query('SELECT COUNT(*) FROM product_categories')->fetchColumn();
+    if ($count === 0) {
+        $seed = db()->prepare('INSERT INTO product_categories (name, icon, sort_order) VALUES (?, ?, ?)');
+        foreach ([['Pipocas', 'popcorn', 10], ['Bebidas', 'cup-soda', 20], ['Doces', 'candy', 30], ['Chocolates', 'cookie', 40]] as $category) $seed->execute($category);
+    }
+    $ready = true;
+}
+
 function open_cash_register(?int $userId = null): ?array
 {
     $userId = $userId ?: (int) Auth::user()['id'];
@@ -427,13 +473,15 @@ function open_cash_register(?int $userId = null): ?array
 
 function cash_totals(int $cashRegisterId): array
 {
+    ensure_product_tables();
     $stmt = db()->prepare(
-        'SELECT payment_method, COUNT(*) tickets, COALESCE(SUM(unit_price), 0) total
-         FROM tickets
-         WHERE cash_register_id = ? AND status = "vendido"
-         GROUP BY payment_method'
+        'SELECT payment_method, SUM(items) tickets, SUM(total) total FROM (
+            SELECT payment_method, COUNT(*) items, COALESCE(SUM(unit_price),0) total FROM tickets WHERE cash_register_id=? AND status="vendido" GROUP BY payment_method
+            UNION ALL
+            SELECT product_sales.payment_method, COUNT(product_sale_items.id) items, product_sales.total_amount total FROM product_sales INNER JOIN product_sale_items ON product_sale_items.product_sale_id=product_sales.id WHERE product_sales.cash_register_id=? GROUP BY product_sales.id, product_sales.payment_method, product_sales.total_amount
+         ) movements GROUP BY payment_method'
     );
-    $stmt->execute([$cashRegisterId]);
+    $stmt->execute([$cashRegisterId, $cashRegisterId]);
     $totals = [
         'dinheiro' => ['tickets' => 0, 'total' => 0.0],
         'cartao' => ['tickets' => 0, 'total' => 0.0],
@@ -510,6 +558,9 @@ try {
 
     if (in_array($route, ['showtimes', 'showtime_new', 'showtime_edit', 'sales', 'sale_new'], true)) {
         ensure_ticket_pricing_columns();
+    }
+    if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'ticket_receipt', 'ticket_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
+        ensure_product_tables();
     }
 
     if (($route === 'dashboard' || $route === '') && Auth::user()['role'] !== 'administrador') {
@@ -748,6 +799,65 @@ try {
             <?php
         });
         exit;
+    }
+
+    if ($route === 'product_categories') {
+        Auth::requireAdmin();
+        $error = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            try {
+                $action = $_POST['action'] ?? 'save';
+                $id = (int) ($_POST['id'] ?? 0);
+                if ($action === 'toggle') {
+                    db()->prepare('UPDATE product_categories SET active = NOT active WHERE id = ?')->execute([$id]);
+                } else {
+                    $name = trim($_POST['name'] ?? '');
+                    if ($name === '') throw new RuntimeException('Informe o nome da categoria.');
+                    $parentId = (int) ($_POST['parent_id'] ?? 0);
+                    if ($parentId === $id) $parentId = 0;
+                    $icon = preg_replace('/[^a-z0-9-]/', '', strtolower($_POST['icon'] ?? 'package')) ?: 'package';
+                    $values = [$parentId ?: null, $name, $icon, (int) ($_POST['sort_order'] ?? 0)];
+                    if ($id > 0) db()->prepare('UPDATE product_categories SET parent_id=?, name=?, icon=?, sort_order=? WHERE id=?')->execute(array_merge($values, [$id]));
+                    else db()->prepare('INSERT INTO product_categories (parent_id, name, icon, sort_order) VALUES (?, ?, ?, ?)')->execute($values);
+                }
+                redirect_to('product_categories');
+            } catch (Throwable $exception) { $error = $exception->getMessage(); }
+        }
+        $categories = db()->query('SELECT c.*, p.name parent_name FROM product_categories c LEFT JOIN product_categories p ON p.id=c.parent_id ORDER BY COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.sort_order, c.name')->fetchAll();
+        $edit = null;
+        if ((int) ($_GET['edit_id'] ?? 0) > 0) { $s=db()->prepare('SELECT * FROM product_categories WHERE id=?'); $s->execute([(int)$_GET['edit_id']]); $edit=$s->fetch(); }
+        layout('Categorias de Produtos', function () use ($categories, $edit, $error) { ?>
+            <div class="section-head"><div><h1>Categorias de Produtos</h1><p class="muted">Organize pipocas, bebidas e doces em uma árvore visual.</p></div></div>
+            <section class="split"><form method="post" class="panel form"><h2><?= $edit?'Editar categoria':'Nova categoria' ?></h2><?php if($error):?><p class="alert"><?=e($error)?></p><?php endif;?>
+                <input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?=(int)($edit['id']??0)?>">
+                <label>Nome<input name="name" value="<?=e($edit['name']??'')?>" required></label>
+                <label>Categoria pai<select name="parent_id"><option value="0">Categoria principal</option><?php foreach($categories as $category): if((int)$category['id']===(int)($edit['id']??0))continue;?><option value="<?=(int)$category['id']?>" <?= (int)($edit['parent_id']??0)===(int)$category['id']?'selected':''?>><?=e($category['name'])?></option><?php endforeach;?></select></label>
+                <label>Ícone<select name="icon"><?php foreach(['package'=>'Pacote','popcorn'=>'Pipoca','cup-soda'=>'Bebida','candy'=>'Doce','cookie'=>'Chocolate','glass-water'=>'Água','ice-cream-bowl'=>'Sorvete','sandwich'=>'Lanche'] as $icon=>$label):?><option value="<?=e($icon)?>" <?=($edit['icon']??'package')===$icon?'selected':''?>><?=e($label)?></option><?php endforeach;?></select></label>
+                <label>Ordem<input name="sort_order" type="number" value="<?=e($edit['sort_order']??0)?>"></label>
+                <div class="toolbar"><button class="button primary">Salvar</button><?php if($edit):?><a class="button" href="index.php?route=product_categories">Cancelar</a><?php endif;?></div>
+            </form><div class="panel"><table><thead><tr><th>Categoria</th><th>Pai</th><th>Status</th><th>Ações</th></tr></thead><tbody><?php foreach($categories as $category):?><tr><td><span class="category-name"><i data-lucide="<?=e($category['icon'])?>"></i><strong><?=e($category['name'])?></strong></span></td><td><?=e($category['parent_name']??'-')?></td><td><span class="status-badge <?=$category['active']?'active':'inactive'?>"><?=$category['active']?'Ativa':'Inativa'?></span></td><td><div class="table-actions"><a class="button" href="index.php?route=product_categories&edit_id=<?=(int)$category['id']?>">Editar</a><form method="post"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?=(int)$category['id']?>"><button class="button <?=$category['active']?'danger':'primary'?>"><?=$category['active']?'Desativar':'Ativar'?></button></form></div></td></tr><?php endforeach;?></tbody></table></div></section>
+        <?php }); exit;
+    }
+
+    if ($route === 'products') {
+        Auth::requireAdmin();
+        $error = '';
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            try {
+                $action=$_POST['action']??'save'; $id=(int)($_POST['id']??0);
+                if($action==='toggle') db()->prepare('UPDATE products SET active=NOT active WHERE id=?')->execute([$id]);
+                else { $name=trim($_POST['name']??''); $categoryId=(int)($_POST['category_id']??0); $price=money_to_decimal($_POST['price']??'0'); if($name===''||$categoryId<1||$price<=0)throw new RuntimeException('Informe categoria, nome e preço válido.'); $sku=trim($_POST['sku']??'')?:null; $stock=trim($_POST['stock_quantity']??'')===''?null:max(0,(int)$_POST['stock_quantity']); $values=[$categoryId,$name,$sku,$price,$stock]; if($id>0)db()->prepare('UPDATE products SET category_id=?,name=?,sku=?,price=?,stock_quantity=? WHERE id=?')->execute(array_merge($values,[$id])); else db()->prepare('INSERT INTO products(category_id,name,sku,price,stock_quantity) VALUES(?,?,?,?,?)')->execute($values); }
+                redirect_to('products');
+            } catch(Throwable $exception){$error=$exception->getCode()==='23000'?'O SKU informado já está cadastrado.':$exception->getMessage();}
+        }
+        $categories=db()->query('SELECT id,name FROM product_categories WHERE active=1 ORDER BY sort_order,name')->fetchAll();
+        $products=db()->query('SELECT products.*,product_categories.name category_name,product_categories.icon category_icon FROM products INNER JOIN product_categories ON product_categories.id=products.category_id ORDER BY product_categories.sort_order,products.name')->fetchAll();
+        $edit=null;if((int)($_GET['edit_id']??0)>0){$s=db()->prepare('SELECT * FROM products WHERE id=?');$s->execute([(int)$_GET['edit_id']]);$edit=$s->fetch();}
+        layout('Produtos', function()use($categories,$products,$edit,$error){?>
+            <div class="section-head"><div><h1>Produtos</h1><p class="muted">Itens vendidos junto aos ingressos.</p></div></div><section class="split"><form method="post" class="panel form"><h2><?=$edit?'Editar produto':'Novo produto'?></h2><?php if($error):?><p class="alert"><?=e($error)?></p><?php endif;?><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?=(int)($edit['id']??0)?>"><label>Categoria<select name="category_id" required><option value="">Selecione</option><?php foreach($categories as $category):?><option value="<?=(int)$category['id']?>" <?= (int)($edit['category_id']??0)===(int)$category['id']?'selected':''?>><?=e($category['name'])?></option><?php endforeach;?></select></label><label>Nome<input name="name" value="<?=e($edit['name']??'')?>" required></label><label>SKU<input name="sku" value="<?=e($edit['sku']??'')?>" placeholder="Opcional"></label><label>Preço<input name="price" inputmode="decimal" value="<?=isset($edit['price'])?e(number_format((float)$edit['price'],2,',','.')):''?>" required></label><label>Estoque<input name="stock_quantity" type="number" min="0" value="<?=e($edit['stock_quantity']??'')?>" placeholder="Vazio = sem controle"></label><div class="toolbar"><button class="button primary">Salvar</button><?php if($edit):?><a class="button" href="index.php?route=products">Cancelar</a><?php endif;?></div></form><div class="panel"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Preço</th><th>Estoque</th><th>Status</th><th>Ações</th></tr></thead><tbody><?php foreach($products as $product):?><tr><td><strong><?=e($product['name'])?></strong><small><?=e($product['sku']??'')?></small></td><td><span class="category-name"><i data-lucide="<?=e($product['category_icon'])?>"></i><?=e($product['category_name'])?></span></td><td>R$ <?=e(number_format((float)$product['price'],2,',','.'))?></td><td><?=$product['stock_quantity']===null?'Livre':(int)$product['stock_quantity']?></td><td><span class="status-badge <?=$product['active']?'active':'inactive'?>"><?=$product['active']?'Ativo':'Inativo'?></span></td><td><div class="table-actions"><a class="button" href="index.php?route=products&edit_id=<?=(int)$product['id']?>">Editar</a><form method="post"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?=(int)$product['id']?>"><button class="button <?=$product['active']?'danger':'primary'?>"><?=$product['active']?'Desativar':'Ativar'?></button></form></div></td></tr><?php endforeach;?></tbody></table></div></section>
+        <?php });exit;
     }
 
     if ($route === 'movies') {
@@ -1237,13 +1347,21 @@ try {
         }
         $totals = cash_totals((int) $cash['id']);
         $sales = db()->prepare(
-            'SELECT sale_code, MIN(sold_at) sold_at, payment_method, COUNT(*) seats, MAX(total_amount) total_amount
-             FROM tickets
-             WHERE cash_register_id = ? AND status = "vendido"
-             GROUP BY sale_code, payment_method
-             ORDER BY sold_at ASC'
+            'SELECT sale_code, sold_at, payment_method, items, total_amount, movement_type FROM (
+                SELECT sale_code, MIN(sold_at) sold_at, payment_method, COUNT(*) items, MAX(total_amount) total_amount, "Ingressos" movement_type
+                FROM tickets
+                WHERE cash_register_id = ? AND status = "vendido"
+                GROUP BY sale_code, payment_method
+                UNION ALL
+                SELECT product_sales.sale_code, product_sales.sold_at, product_sales.payment_method, COUNT(product_sale_items.id) items, product_sales.total_amount, "Produtos" movement_type
+                FROM product_sales
+                INNER JOIN product_sale_items ON product_sale_items.product_sale_id = product_sales.id
+                WHERE product_sales.cash_register_id = ?
+                GROUP BY product_sales.id, product_sales.sale_code, product_sales.sold_at, product_sales.payment_method, product_sales.total_amount
+             ) cash_movements
+             ORDER BY sold_at ASC, movement_type ASC'
         );
-        $sales->execute([(int) $cash['id']]);
+        $sales->execute([(int) $cash['id'], (int) $cash['id']]);
         $operations = $sales->fetchAll();
         layout('Comprovante de Caixa', function () use ($cash, $totals, $operations) {
             ?>
@@ -1268,7 +1386,7 @@ try {
                 <p><strong>Contado:</strong> R$ <?= e(number_format((float) $cash['closing_amount'], 2, ',', '.')) ?></p>
                 <h2>Operações</h2>
                 <?php foreach ($operations as $operation): ?>
-                    <p><?= e(date('H:i', strtotime($operation['sold_at']))) ?> - <?= e($operation['sale_code']) ?> - <?= e($operation['seats']) ?> poltrona(s) - <?= e(ucfirst($operation['payment_method'])) ?> - R$ <?= e(number_format((float) $operation['total_amount'], 2, ',', '.')) ?></p>
+                    <p><?= e(date('H:i', strtotime($operation['sold_at']))) ?> - <?= e($operation['sale_code']) ?> - <?= e($operation['movement_type']) ?>: <?= e($operation['items']) ?> item(ns) - <?= e(ucfirst($operation['payment_method'])) ?> - R$ <?= e(number_format((float) $operation['total_amount'], 2, ',', '.')) ?></p>
                 <?php endforeach; ?>
             </section>
             <?php
@@ -1367,18 +1485,20 @@ try {
             $fullPrice = (float) $showtime['price'];
             $halfPrice = (float) ($showtime['half_price'] ?? ($fullPrice / 2));
             $ticketTypes = [];
-            $totalAmount = 0.0;
+            $ticketTotal = 0.0;
             foreach ($seatIds as $seatId) {
                 $ticketType = ($seatTypes[$seatId] ?? 'inteira') === 'meia' ? 'meia' : 'inteira';
                 $ticketTypes[$seatId] = $ticketType;
-                $totalAmount += $ticketType === 'meia' ? $halfPrice : $fullPrice;
+                $ticketTotal += $ticketType === 'meia' ? $halfPrice : $fullPrice;
             }
-            $changeAmount = $paymentMethod === 'dinheiro' ? max(0, $amountPaid - $totalAmount) : 0;
-            if ($paymentMethod === 'dinheiro' && $amountPaid < $totalAmount) {
-                throw new RuntimeException('Valor recebido em dinheiro é menor que o total da venda.');
+            $productQuantities = [];
+            foreach ((array) ($_POST['product_qty'] ?? []) as $productId => $quantity) {
+                $quantity = min(20, max(0, (int) $quantity));
+                if ($quantity > 0) $productQuantities[(int) $productId] = $quantity;
             }
 
             db()->beginTransaction();
+            try {
             $placeholders = implode(',', array_fill(0, count($seatIds), '?'));
             $params = array_merge([$showtimeId], $seatIds);
             $check = db()->prepare(
@@ -1395,9 +1515,27 @@ try {
             $check->execute($params);
             $availableSeats = $check->fetchAll();
             if (count($availableSeats) !== count($seatIds)) {
-                db()->rollBack();
                 throw new RuntimeException('Uma ou mais poltronas já foram vendidas. Atualize a tela e escolha novamente.');
             }
+
+            $productRows = [];
+            $productTotal = 0.0;
+            if ($productQuantities) {
+                $productIds = array_keys($productQuantities);
+                $productPlaceholders = implode(',', array_fill(0, count($productIds), '?'));
+                $productStmt = db()->prepare("SELECT id, name, price, stock_quantity FROM products WHERE id IN ($productPlaceholders) AND active=1 FOR UPDATE");
+                $productStmt->execute($productIds);
+                foreach ($productStmt->fetchAll() as $product) $productRows[(int) $product['id']] = $product;
+                if (count($productRows) !== count($productIds)) throw new RuntimeException('Um dos produtos selecionados não está mais disponível.');
+                foreach ($productQuantities as $productId => $quantity) {
+                    $product = $productRows[$productId];
+                    if ($product['stock_quantity'] !== null && (int) $product['stock_quantity'] < $quantity) throw new RuntimeException('Estoque insuficiente para ' . $product['name'] . '.');
+                    $productTotal += (float) $product['price'] * $quantity;
+                }
+            }
+            $grandTotal = $ticketTotal + $productTotal;
+            $changeAmount = $paymentMethod === 'dinheiro' ? max(0, $amountPaid - $grandTotal) : 0;
+            if ($paymentMethod === 'dinheiro' && $amountPaid < $grandTotal) throw new RuntimeException('Valor recebido em dinheiro é menor que o total da venda.');
 
             $code = sale_code();
             $insert = db()->prepare(
@@ -1419,12 +1557,31 @@ try {
                     $paymentMethod,
                     $ticketType,
                     $unitPrice,
-                    $totalAmount,
-                    $paymentMethod === 'dinheiro' ? $amountPaid : $totalAmount,
+                    $ticketTotal,
+                    $paymentMethod === 'dinheiro' ? $amountPaid : $grandTotal,
                     $changeAmount,
                 ]);
             }
+            if ($productRows) {
+                $productSale = db()->prepare('INSERT INTO product_sales (sale_code, seller_user_id, cash_register_id, payment_method, total_amount, sold_at) VALUES (?, ?, ?, ?, ?, NOW())');
+                $productSale->execute([$code, (int) Auth::user()['id'], (int) $cash['id'], $paymentMethod, $productTotal]);
+                $productSaleId = (int) db()->lastInsertId();
+                $productItem = db()->prepare('INSERT INTO product_sale_items (product_sale_id, product_id, unit_price, qr_token) VALUES (?, ?, ?, ?)');
+                $stockUpdate = db()->prepare('UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity IS NOT NULL');
+                foreach ($productQuantities as $productId => $quantity) {
+                    for ($i = 0; $i < $quantity; $i++) $productItem->execute([$productSaleId, $productId, (float) $productRows[$productId]['price'], ticket_token()]);
+                    $stockUpdate->execute([$quantity, $productId]);
+                }
+            }
             db()->commit();
+            } catch (Throwable $exception) {
+                if (db()->inTransaction()) db()->rollBack();
+                if (($exception instanceof PDOException && (string) $exception->getCode() === '23000') || str_contains($exception->getMessage(), 'poltronas já foram vendidas')) {
+                    header('Location: index.php?route=sale_new&showtime_id=' . $showtimeId . '&seat_conflict=1');
+                    exit;
+                }
+                throw $exception;
+            }
             header('Location: index.php?route=ticket_receipt&sale_code=' . urlencode($code));
             exit;
         }
@@ -1440,10 +1597,13 @@ try {
         );
         $seatsStmt->execute([$showtimeId, (int) $showtime['room_id']]);
         $seats = $seatsStmt->fetchAll();
+        $productCategories = db()->query('SELECT * FROM product_categories WHERE active=1 ORDER BY COALESCE(parent_id,id), parent_id IS NOT NULL, sort_order, name')->fetchAll();
+        $products = db()->query('SELECT products.*, product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY product_categories.sort_order, products.name')->fetchAll();
         $screen = json_decode($showtime['screen_config'] ?: '{}', true) ?: ['x' => 270, 'y' => 28, 'w' => 500, 'h' => 34];
 
-        layout('Venda', function () use ($showtime, $seats, $screen) {
+        layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products) {
             ?>
+            <?php if (!empty($_GET['seat_conflict'])): ?><p class="sale-conflict">Uma poltrona foi vendida em outro terminal. O mapa foi atualizado; selecione outra.</p><?php endif; ?>
             <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>">
                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                 <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
@@ -1487,7 +1647,7 @@ try {
                         <label id="amount-paid-row">Valor recebido<input name="amount_paid" id="amount-paid" inputmode="decimal" placeholder="Ex: 50,00"></label>
                         <p class="summary-item" id="change-row">Troco <strong id="sale-change">R$ 0,00</strong></p>
                     </div>
-                    <button class="button primary finish-sale" id="finish-sale" disabled>Finalizar venda</button>
+                    <button class="button primary finish-sale" type="button" id="continue-sale" disabled>Continuar</button>
                 </aside>
                 <footer class="panel sale-footer">
                     <div class="ticket-type-toolbar" role="group" aria-label="Tipo do ingresso para as próximas poltronas">
@@ -1497,6 +1657,29 @@ try {
                     </div>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </footer>
+                <div class="sale-wizard" id="sale-wizard" hidden>
+                    <section class="sale-wizard-dialog" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
+                        <header><div><span class="eyebrow">Passo 2 de 2</span><h2 id="wizard-title">Adicionar delícias</h2><p>Escolha produtos ou finalize sem adicionar nada.</p></div><button class="icon-button" type="button" id="close-wizard" title="Voltar às poltronas">×</button></header>
+                        <div class="product-wizard-layout">
+                            <nav class="product-category-tree" aria-label="Categorias de produtos">
+                                <button type="button" class="active" data-category="all"><i data-lucide="layout-grid"></i><span>Todos</span></button>
+                                <?php foreach ($productCategories as $category): ?>
+                                    <button type="button" data-category="<?= (int) $category['id'] ?>" class="<?= $category['parent_id'] ? 'child' : '' ?>"><i data-lucide="<?= e($category['icon']) ?>"></i><span><?= e($category['name']) ?></span></button>
+                                <?php endforeach; ?>
+                            </nav>
+                            <div class="product-picker">
+                                <?php foreach ($products as $product): ?>
+                                    <article class="product-pick-card" data-category="<?= (int) $product['category_id'] ?>" data-price="<?= e($product['price']) ?>">
+                                        <div><strong><?= e($product['name']) ?></strong><span><?= e($product['category_name']) ?></span><b>R$ <?= e(number_format((float) $product['price'], 2, ',', '.')) ?></b></div>
+                                        <div class="quantity-stepper"><button type="button" data-delta="-1" aria-label="Diminuir">−</button><input name="product_qty[<?= (int) $product['id'] ?>]" type="number" min="0" max="20" value="0" readonly><button type="button" data-delta="1" aria-label="Adicionar">+</button></div>
+                                    </article>
+                                <?php endforeach; ?>
+                                <?php if (!$products): ?><p class="muted">Nenhum produto disponível. Cadastre produtos para usar esta etapa.</p><?php endif; ?>
+                            </div>
+                        </div>
+                        <footer><div><span>Ingressos + produtos</span><strong id="wizard-total">R$ 0,00</strong></div><label id="wizard-paid-row">Valor recebido<input id="wizard-amount-paid" inputmode="decimal" placeholder="Ex: 100,00"></label><button class="button" type="button" id="back-to-seats">Voltar</button><button class="button primary" id="finish-sale">Finalizar venda</button></footer>
+                    </section>
+                </div>
             </form>
             <script src="assets/js/sale.js"></script>
             <?php
@@ -1513,12 +1696,16 @@ try {
         }
         $first = $tickets[0];
         $cinema = cinema_settings();
-        layout('Ingressos', function () use ($tickets, $first, $cinema) {
+        $productCountStmt = db()->prepare('SELECT COUNT(*) FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id WHERE product_sales.sale_code=?');
+        $productCountStmt->execute([$saleCode]);
+        $productCount = (int) $productCountStmt->fetchColumn();
+        layout('Ingressos', function () use ($tickets, $first, $cinema, $productCount) {
             ?>
             <div class="section-head no-print">
                 <h1><?= count($tickets) ?> ingresso(s) emitido(s)</h1>
                 <div class="toolbar">
                     <a class="button primary" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir ingressos separados</a>
+                    <?php if ($productCount): ?><a class="button primary" href="index.php?route=product_receipt&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir produtos (<?= $productCount ?>)</a><?php endif; ?>
                     <a class="button primary" href="index.php?route=sale_new&showtime_id=<?= (int) $first['showtime_id'] ?>">Nova venda nesta sessão</a>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
@@ -1620,6 +1807,61 @@ try {
         </html>
         <?php
         exit;
+    }
+
+    if ($route === 'product_receipt') {
+        Auth::requireLogin();
+        $saleCode = trim($_GET['sale_code'] ?? '');
+        $stmt = db()->prepare('SELECT product_sale_items.*, products.name product_name, product_categories.name category_name, product_sales.sale_code, product_sales.payment_method, product_sales.total_amount FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id WHERE product_sales.sale_code=? ORDER BY product_categories.sort_order, products.name, product_sale_items.id');
+        $stmt->execute([$saleCode]);
+        $items = $stmt->fetchAll();
+        if (!$items) { http_response_code(404); exit('Recibo de produtos não encontrado.'); }
+        $cinema = cinema_settings();
+        ?><!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Produtos <?=e($saleCode)?></title><style>
+        *{box-sizing:border-box}body{margin:0;color:#000;background:#fff;font:12px/1.25 "Courier New",monospace}.actions{text-align:center;padding:12px;background:#eee}.actions button{padding:9px 14px;border:0;background:#c2410c;color:#fff;font-weight:700}.product-receipt{width:40ch;max-width:calc(100% - 8mm);margin:auto;padding:4mm 0}.product-receipt+.product-receipt{break-before:page;page-break-before:always}.receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}h1{text-align:center;font-size:15px}.line{overflow:hidden}.line:before{content:"----------------------------------------"}p{margin:3px 0}[data-ticket-qr]{width:36mm;height:36mm;margin:8px auto}[data-ticket-qr] img,[data-ticket-qr] canvas{width:36mm!important;height:36mm!important;display:block}.code{text-align:center;font-size:8px;word-break:break-all}@media print{.actions{display:none}.product-receipt{width:40ch;max-width:none;padding:0}@page{size:80mm auto;margin:3mm}}
+        </style></head><body><div class="actions"><button id="print-products">Imprimir produtos</button></div><?php foreach($items as $item):$url=app_url('product_pickup_lookup',['token'=>$item['qr_token']]);?><main class="product-receipt"><?php if($cinema['has_logo']):?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif;?><h1>RETIRADA DE PRODUTO</h1><div class="line"></div><p><strong>Venda:</strong> <?=e($item['sale_code'])?></p><p><strong>Produto:</strong> <?=e($item['product_name'])?></p><p><strong>Categoria:</strong> <?=e($item['category_name'])?></p><p><strong>Valor:</strong> R$ <?=e(number_format((float)$item['unit_price'],2,',','.'))?></p><div class="line"></div><div data-ticket-qr data-url="<?=e($url)?>"></div><div class="code"><?=e($item['qr_token'])?></div><p style="text-align:center;font-weight:bold">Apresente no balcão de retirada.</p></main><?php endforeach;?><script src="assets/js/vendor/qrcode.min.js"></script><script src="assets/js/ticket-qr.js"></script><script>document.getElementById('print-products').onclick=async()=>{await(window.ticketQrReady||Promise.resolve());window.print();};</script></body></html><?php exit;
+    }
+
+    if ($route === 'product_pickup_lookup') {
+        Auth::requireLogin();
+        header('Content-Type: application/json; charset=utf-8');
+        $token = trim($_GET['token'] ?? '');
+        if (str_contains($token, 'product_pickup_lookup')) { $parts=parse_url($token);parse_str($parts['query']??'',$query);$token=trim($query['token']??''); }
+        $stmt=db()->prepare('SELECT product_sale_items.id,product_sale_items.qr_token,product_sale_items.status,product_sale_items.delivered_at,products.name product_name,product_categories.name category_name,product_sales.sale_code FROM product_sale_items INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id WHERE product_sale_items.qr_token=? LIMIT 1');
+        $stmt->execute([$token]);$item=$stmt->fetch();
+        if(!$item){http_response_code(404);echo json_encode(['ok'=>false,'message'=>'Produto não encontrado.']);exit;}
+        echo json_encode(['ok'=>true,'item'=>$item],JSON_UNESCAPED_UNICODE);exit;
+    }
+
+    if ($route === 'product_pickup') {
+        Auth::requireLogin();
+        $delivered=0;
+        if($_SERVER['REQUEST_METHOD']==='POST'){
+            verify_csrf();$ids=array_values(array_unique(array_filter(array_map('intval',(array)($_POST['item_ids']??[])))));
+            if($ids){$placeholders=implode(',',array_fill(0,count($ids),'?'));$params=array_merge([(new DateTimeImmutable('now',new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s'),(int)Auth::user()['id']],$ids);$stmt=db()->prepare("UPDATE product_sale_items SET status='entregue',delivered_at=?,delivered_by=? WHERE status='pendente' AND id IN ($placeholders)");$stmt->execute($params);$delivered=$stmt->rowCount();}
+        }
+        layout('Retira de Produtos',function()use($delivered){?>
+            <div class="section-head"><div><h1>Retira de Produtos</h1><p class="muted">Leia os QR Codes, confira a lista e finalize quando entregar tudo ao cliente.</p></div></div>
+            <?php if($delivered):?><p class="pickup-success"><?=$delivered?> produto(s) entregue(s) com sucesso.</p><?php endif;?>
+            <section class="pickup-layout"><div class="panel pickup-scanner"><div class="qr-camera-box"><video id="product-qr-video" playsinline muted></video></div><div class="qr-reader-actions"><button class="button primary" type="button" id="start-product-reader">Abrir câmera</button><button class="button" type="button" id="stop-product-reader" disabled>Parar</button></div><p id="product-reader-status" class="muted">Aguardando leitura.</p><form id="manual-product-form" class="form"><label>Código do produto<input id="manual-product-token" placeholder="Cole ou digite o código"></label><button class="button">Adicionar à lista</button></form></div>
+            <form method="post" class="panel pickup-cart" id="pickup-form"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><div class="panel-heading"><div><span class="eyebrow">Conferência</span><h2>Produtos lidos</h2></div><strong id="pickup-count">0</strong></div><div id="pickup-items" class="pickup-items"><p class="muted empty">Nenhum produto lido.</p></div><button class="button primary pickup-finish" id="finish-pickup" disabled>Finalizar entrega</button></form></section>
+            <script src="assets/js/product-pickup.js"></script>
+        <?php });exit;
+    }
+
+    if ($route === 'product_report') {
+        Auth::requireAdmin();
+        $filters=['date_from'=>trim($_GET['date_from']??date('Y-m-01')),'date_to'=>trim($_GET['date_to']??date('Y-m-d')),'category_id'=>(int)($_GET['category_id']??0),'product_id'=>(int)($_GET['product_id']??0),'user_id'=>(int)($_GET['user_id']??0),'payment'=>trim($_GET['payment']??''),'status'=>trim($_GET['status']??'')];
+        $where=['DATE(product_sales.sold_at) BETWEEN ? AND ?'];$params=[$filters['date_from'],$filters['date_to']];
+        foreach(['category_id'=>'products.category_id','product_id'=>'products.id','user_id'=>'product_sales.seller_user_id'] as $key=>$column)if($filters[$key]>0){$where[]="$column=?";$params[]=$filters[$key];}
+        if(in_array($filters['payment'],['dinheiro','cartao','pix'],true)){$where[]='product_sales.payment_method=?';$params[]=$filters['payment'];}
+        if(in_array($filters['status'],['pendente','entregue','cancelado'],true)){$where[]='product_sale_items.status=?';$params[]=$filters['status'];}
+        $sql='SELECT DATE(product_sales.sold_at) sale_date,products.name product_name,product_categories.name category_name,users.name seller_name,product_sales.payment_method,product_sale_items.status,COUNT(*) quantity,SUM(product_sale_items.unit_price) total FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id INNER JOIN users ON users.id=product_sales.seller_user_id WHERE '.implode(' AND ',$where).' GROUP BY DATE(product_sales.sold_at),products.id,product_categories.id,users.id,product_sales.payment_method,product_sale_items.status ORDER BY sale_date DESC,category_name,product_name';
+        $stmt=db()->prepare($sql);$stmt->execute($params);$rows=$stmt->fetchAll();
+        $categories=db()->query('SELECT id,name FROM product_categories ORDER BY name')->fetchAll();$productsFilter=db()->query('SELECT id,name FROM products ORDER BY name')->fetchAll();$usersFilter=db()->query('SELECT id,name FROM users ORDER BY name')->fetchAll();$totalQty=array_sum(array_column($rows,'quantity'));$totalValue=array_sum(array_column($rows,'total'));
+        layout('Relatório de Produtos',function()use($filters,$rows,$categories,$productsFilter,$usersFilter,$totalQty,$totalValue){?>
+            <div class="section-head"><div><h1>Relatório de Produtos</h1><p class="muted">Vendas e situação de retirada.</p></div></div><form method="get" class="panel form filters"><input type="hidden" name="route" value="product_report"><div class="columns compact"><label>De<input type="date" name="date_from" value="<?=e($filters['date_from'])?>"></label><label>Até<input type="date" name="date_to" value="<?=e($filters['date_to'])?>"></label><label>Categoria<select name="category_id"><option value="0">Todas</option><?php foreach($categories as $item):?><option value="<?=(int)$item['id']?>" <?=$filters['category_id']==(int)$item['id']?'selected':''?>><?=e($item['name'])?></option><?php endforeach;?></select></label><label>Produto<select name="product_id"><option value="0">Todos</option><?php foreach($productsFilter as $item):?><option value="<?=(int)$item['id']?>" <?=$filters['product_id']==(int)$item['id']?'selected':''?>><?=e($item['name'])?></option><?php endforeach;?></select></label><label>Operador<select name="user_id"><option value="0">Todos</option><?php foreach($usersFilter as $item):?><option value="<?=(int)$item['id']?>" <?=$filters['user_id']==(int)$item['id']?'selected':''?>><?=e($item['name'])?></option><?php endforeach;?></select></label><label>Pagamento<select name="payment"><option value="">Todos</option><?php foreach(['dinheiro'=>'Dinheiro','cartao'=>'Cartão','pix'=>'Pix'] as $key=>$label):?><option value="<?=$key?>" <?=$filters['payment']===$key?'selected':''?>><?=$label?></option><?php endforeach;?></select></label><label>Retirada<select name="status"><option value="">Todas</option><?php foreach(['pendente'=>'Pendente','entregue'=>'Entregue','cancelado'=>'Cancelado'] as $key=>$label):?><option value="<?=$key?>" <?=$filters['status']===$key?'selected':''?>><?=$label?></option><?php endforeach;?></select></label></div><div class="toolbar"><button class="button primary">Filtrar</button><a class="button" href="index.php?route=product_report">Limpar</a></div></form><div class="stats"><div class="stat"><strong><?=e($totalQty)?></strong><span>Unidades</span></div><div class="stat hero-stat"><strong>R$ <?=e(number_format((float)$totalValue,2,',','.'))?></strong><span>Vendas de produtos</span></div></div><div class="panel"><table><thead><tr><th>Data</th><th>Produto</th><th>Categoria</th><th>Operador</th><th>Pagamento</th><th>Retirada</th><th>Qtd.</th><th>Total</th></tr></thead><tbody><?php foreach($rows as $row):?><tr><td><?=e(date('d/m/Y',strtotime($row['sale_date'])))?></td><td><strong><?=e($row['product_name'])?></strong></td><td><?=e($row['category_name'])?></td><td><?=e($row['seller_name'])?></td><td><?=e(ucfirst($row['payment_method']))?></td><td><span class="status-badge <?=$row['status']==='entregue'?'active':'inactive'?>"><?=e(ucfirst($row['status']))?></span></td><td><?=(int)$row['quantity']?></td><td>R$ <?=e(number_format((float)$row['total'],2,',','.'))?></td></tr><?php endforeach;?><?php if(!$rows):?><tr><td colspan="8">Nenhuma venda encontrada.</td></tr><?php endif;?></tbody></table></div>
+        <?php });exit;
     }
 
     if ($route === 'qr_reader') {
@@ -1890,13 +2132,17 @@ try {
 
     $paymentStmt = db()->prepare(
         "SELECT
-            COALESCE(SUM(CASE WHEN payment_method = 'dinheiro' AND status = 'vendido' THEN unit_price ELSE 0 END), 0) cash_total,
-            COALESCE(SUM(CASE WHEN payment_method = 'cartao' AND status = 'vendido' THEN unit_price ELSE 0 END), 0) card_total,
-            COALESCE(SUM(CASE WHEN payment_method = 'pix' AND status = 'vendido' THEN unit_price ELSE 0 END), 0) pix_total
-         FROM tickets WHERE DATE(sold_at) = ?"
+            COALESCE(SUM(CASE WHEN payment_method='dinheiro' THEN amount ELSE 0 END),0) cash_total,
+            COALESCE(SUM(CASE WHEN payment_method='cartao' THEN amount ELSE 0 END),0) card_total,
+            COALESCE(SUM(CASE WHEN payment_method='pix' THEN amount ELSE 0 END),0) pix_total
+         FROM (
+            SELECT payment_method,unit_price amount FROM tickets WHERE status='vendido' AND DATE(sold_at)=?
+            UNION ALL SELECT payment_method,total_amount amount FROM product_sales WHERE DATE(sold_at)=?
+         ) daily_movements"
     );
-    $paymentStmt->execute([$dashboardDate]);
+    $paymentStmt->execute([$dashboardDate, $dashboardDate]);
     $paymentSummary = $paymentStmt->fetch();
+    $stats['revenue'] = (float) $paymentSummary['cash_total'] + (float) $paymentSummary['card_total'] + (float) $paymentSummary['pix_total'];
 
     $cashRowsStmt = db()->prepare(
         "SELECT cash_registers.*, users.name user_name
