@@ -1698,13 +1698,15 @@ try {
                     </div>
                 </section>
                 <aside class="panel sale-side-panel">
-                    <div class="sale-session-info">
-                        <span class="eyebrow">Venda de ingressos</span>
-                        <h1><?= e($showtime['movie_title']) ?></h1>
-                        <strong><?= e($showtime['room_name']) ?></strong>
-                        <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(ucfirst($showtime['audio_type'])) ?></span>
+                    <div class="sale-session-card <?= $showtime['has_cover'] ? 'has-cover' : '' ?>">
+                        <div class="sale-session-info">
+                            <span class="eyebrow">Venda de ingressos</span>
+                            <h1><?= e($showtime['movie_title']) ?></h1>
+                            <strong><?= e($showtime['room_name']) ?></strong>
+                            <span><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(ucfirst($showtime['audio_type'])) ?></span>
+                        </div>
+                        <?php if ($showtime['has_cover']): ?><img class="sale-side-cover" src="index.php?route=movie_cover&id=<?= (int) $showtime['movie_id'] ?>" alt="Capa de <?= e($showtime['movie_title']) ?>"><?php endif; ?>
                     </div>
-                    <?php if ($showtime['has_cover']): ?><img class="sale-side-cover" src="index.php?route=movie_cover&id=<?= (int) $showtime['movie_id'] ?>" alt="Capa de <?= e($showtime['movie_title']) ?>"><?php endif; ?>
                     <div class="legend">
                         <span><i class="free"></i>Disponível</span>
                         <span><i class="selected"></i>Selecionada</span>
