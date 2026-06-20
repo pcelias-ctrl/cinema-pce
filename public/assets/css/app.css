@@ -46,19 +46,24 @@ h2 { font-size: 16px; font-weight: 600; }
 }
 .app-header .navbar-text { color: var(--muted); font-size: 12px; font-weight: 700; }
 .sidebar {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
     padding: 16px 10px 12px;
     background: #222d32;
     color: white;
     box-shadow: 16px 0 42px rgba(20, 32, 29, .16);
 }
-.sidebar-brand { padding: 0 10px 14px; border-bottom: 1px solid rgba(255,255,255,.10); }
+.sidebar-brand { flex: 0 0 auto; padding: 2px 10px 14px; border-bottom: 1px solid rgba(255,255,255,.10); }
 .sidebar-brand .brand { display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 19px; }
 .sidebar-brand .brand img { width: 34px; height: 34px; flex: 0 0 auto; object-fit: contain; border-radius: 3px; background: white; }
 .sidebar-brand .brand strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-brand span { display: block; margin-top: 4px; color: #aebdb8; font-size: 11px; font-weight: 700; }
 .public-topbar .brand { display: flex; align-items: center; gap: 10px; }
 .public-topbar .brand img { width: 38px; height: 38px; object-fit: contain; border-radius: 3px; background: white; }
 .sidebar-user {
+    flex: 0 0 auto;
     display: grid;
     gap: 3px;
     margin: 12px 4px 8px;
@@ -69,7 +74,19 @@ h2 { font-size: 16px; font-weight: 600; }
 }
 .sidebar-user span { color: #aebdb8; font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .sidebar-user strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.sidebar-wrapper { overflow-y: auto; }
+.sidebar-wrapper {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-bottom: 12px;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #667a73 transparent;
+}
+.sidebar-wrapper::-webkit-scrollbar { width: 7px; }
+.sidebar-wrapper::-webkit-scrollbar-thumb { border-radius: 8px; background: #667a73; }
+.sidebar-wrapper::-webkit-scrollbar-track { background: transparent; }
 .sidebar nav { display: flex; flex-direction: column; gap: 3px; }
 .sidebar-menu { gap: 3px; }
 .sidebar nav a {

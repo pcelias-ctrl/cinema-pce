@@ -51,7 +51,6 @@ function layout(string $title, callable $content): void
                         <?php if ($cinema['has_logo']): ?><img src="index.php?route=cinema_logo" alt="<?= e($cinema['cinema_name']) ?>"><?php endif; ?>
                         <strong><?= e($cinema['cinema_name']) ?></strong>
                     </a>
-                    <span>Gestão & Bilheteria</span>
                 </div>
                 <div class="sidebar-user">
                     <span><?= $user['role'] === 'administrador' ? 'Administrador' : 'Operador' ?></span>
