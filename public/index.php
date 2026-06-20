@@ -71,7 +71,7 @@ function layout(string $title, callable $content): void
                             <li class="nav-header">OPERAÇÃO</li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
-                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Leitor QR</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Check-in QR</p></a></li>
                             <?php if ($user['role'] === 'administrador'): ?>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('users') ?>" href="index.php?route=users"><i></i><p>Usuários</p></a></li>
                             <?php endif; ?>
@@ -1448,12 +1448,12 @@ try {
 
     if ($route === 'qr_reader') {
         Auth::requireLogin();
-        layout('Leitor QR', function () {
+        layout('Check-in QR', function () {
             ?>
             <div class="section-head">
                 <div>
-                    <h1>Leitor de QR Code</h1>
-                    <p class="muted">Aponte a câmera para o QR Code do ingresso.</p>
+                    <h1>Check-in por QR Code</h1>
+                    <p class="muted">Leia o ingresso e confirme a entrada na sessão correta.</p>
                 </div>
             </div>
             <section class="panel qr-reader-panel">
@@ -1493,7 +1493,7 @@ try {
             verify_csrf();
             $stmt = db()->prepare('UPDATE tickets SET checked_in_at = NOW(), checked_in_by = ? WHERE (qr_token = ? OR sale_code = ?) AND status = "vendido" AND checked_in_at IS NULL');
             $stmt->execute([(int) Auth::user()['id'], $rawToken, $rawToken]);
-            header('Location: index.php?route=ticket_validate&token=' . urlencode($rawToken));
+            header('Location: index.php?route=ticket_validate&token=' . urlencode($rawToken) . '&checked=' . $stmt->rowCount());
             exit;
         }
 
@@ -1515,29 +1515,35 @@ try {
 
         $first = $tickets[0] ?? null;
         $alreadyUsed = $first && !empty($first['checked_in_at']);
-        layout('Validação do Ingresso', function () use ($rawToken, $tickets, $first, $alreadyUsed) {
+        $checkedNow = max(0, (int) ($_GET['checked'] ?? 0));
+        layout('Check-in do Ingresso', function () use ($rawToken, $tickets, $first, $alreadyUsed, $checkedNow) {
             ?>
             <div class="section-head">
                 <div>
-                    <h1>Validação do Ingresso</h1>
-                    <p class="muted">Resultado da leitura do QR Code.</p>
+                    <h1>Check-in do Ingresso</h1>
+                    <p class="muted">Controle de entrada por sessão, filme e sala.</p>
                 </div>
                 <a class="button" href="index.php?route=qr_reader">Ler outro QR</a>
             </div>
             <?php if (!$rawToken || !$first): ?>
                 <section class="validation-card invalid">
-                    <strong>Ingresso inválido</strong>
+                    <strong>QR Code inválido</strong>
                     <span>QR Code não encontrado ou venda inexistente.</span>
+                </section>
+            <?php elseif ($checkedNow > 0): ?>
+                <section class="validation-card valid">
+                    <strong>Check-in realizado</strong>
+                    <span><?= $checkedNow ?> ingresso(s) registrado(s) para esta sessão.</span>
                 </section>
             <?php elseif ($alreadyUsed): ?>
                 <section class="validation-card used">
-                    <strong>Ingresso já utilizado</strong>
+                    <strong>Check-in já realizado</strong>
                     <span>Entrada registrada em <?= e(date('d/m/Y H:i', strtotime($first['checked_in_at']))) ?>.</span>
                 </section>
             <?php else: ?>
                 <section class="validation-card valid">
-                    <strong>Ingresso verdadeiro</strong>
-                    <span>Conferido com sucesso. Libere a entrada após confirmar.</span>
+                    <strong>Ingresso localizado</strong>
+                    <span>Confira filme, sala e horário antes de confirmar o check-in.</span>
                 </section>
             <?php endif; ?>
 
@@ -1556,7 +1562,7 @@ try {
                             <form method="post">
                                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                                 <input type="hidden" name="token" value="<?= e($first['qr_token'] ?: $rawToken) ?>">
-                                <button class="button primary">Confirmar entrada</button>
+                                <button class="button primary">Confirmar check-in</button>
                             </form>
                         <?php endif; ?>
                     </div>
@@ -1641,7 +1647,8 @@ try {
             COUNT(DISTINCT showtimes.id) showtimes,
             COUNT(DISTINCT showtimes.room_id) rooms,
             COALESCE(SUM(CASE WHEN tickets.status = 'vendido' THEN tickets.unit_price ELSE 0 END), 0) revenue,
-            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) tickets
+            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) tickets,
+            COUNT(CASE WHEN tickets.status = 'vendido' AND tickets.checked_in_at IS NOT NULL THEN tickets.id END) checked_in
          FROM showtimes
          LEFT JOIN tickets ON tickets.showtime_id = showtimes.id
          WHERE DATE(showtimes.starts_at) = ?"
@@ -1652,7 +1659,8 @@ try {
     $occupancyStmt = db()->prepare(
         "SELECT showtimes.id, showtimes.starts_at, showtimes.audio_type, showtimes.price,
             movies.title movie_title, rooms.name room_name, rooms.capacity,
-            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) sold
+            COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) sold,
+            COUNT(CASE WHEN tickets.status = 'vendido' AND tickets.checked_in_at IS NOT NULL THEN tickets.id END) checked_in
          FROM showtimes
          INNER JOIN movies ON movies.id = showtimes.movie_id
          INNER JOIN rooms ON rooms.id = showtimes.room_id
@@ -1681,6 +1689,7 @@ try {
     $roomStmt = db()->prepare(
         "SELECT rooms.name room_name,
             COUNT(CASE WHEN tickets.status = 'vendido' THEN tickets.id END) tickets,
+            COUNT(CASE WHEN tickets.status = 'vendido' AND tickets.checked_in_at IS NOT NULL THEN tickets.id END) checked_in,
             COALESCE(SUM(CASE WHEN tickets.status = 'vendido' THEN tickets.unit_price ELSE 0 END), 0) revenue
          FROM showtimes
          INNER JOIN rooms ON rooms.id = showtimes.room_id
@@ -1713,6 +1722,8 @@ try {
         <div class="stats cockpit-stats">
             <div class="stat hero-stat"><strong>R$ <?= e(number_format((float) $stats['revenue'], 2, ',', '.')) ?></strong><span>Vendas do dia</span></div>
             <div class="stat"><strong><?= (int) $stats['tickets'] ?></strong><span>Ingressos vendidos</span></div>
+            <div class="stat checkin-stat"><strong><?= (int) $stats['checked_in'] ?></strong><span>Check-ins realizados</span></div>
+            <div class="stat remaining-stat"><strong><?= max(0, (int) $stats['tickets'] - (int) $stats['checked_in']) ?></strong><span>Ingressos restantes</span></div>
             <div class="stat"><strong><?= (int) $stats['showtimes'] ?></strong><span>Sessões no dia</span></div>
             <div class="stat"><strong><?= (int) $stats['rooms'] ?></strong><span>Salas em operação</span></div>
             <div class="stat occupancy-stat">
@@ -1730,12 +1741,15 @@ try {
                         <?php
                         $capacity = max(1, (int) $session['capacity']);
                         $sold = (int) $session['sold'];
+                        $checkedIn = (int) $session['checked_in'];
+                        $remaining = max(0, $sold - $checkedIn);
                         $percent = min(100, round(($sold / $capacity) * 100));
                         ?>
                         <div class="occupancy-item">
                             <div>
                                 <strong><?= e(date('H:i', strtotime($session['starts_at']))) ?> - <?= e($session['movie_title']) ?></strong>
-                                <span><?= e($session['room_name']) ?> | <?= e(ucfirst($session['audio_type'])) ?> | <?= $sold ?>/<?= $capacity ?> poltronas</span>
+                                <span><?= e($session['room_name']) ?> | <?= e(ucfirst($session['audio_type'])) ?> | <?= $sold ?>/<?= $capacity ?> vendidos</span>
+                                <span class="checkin-line"><?= $checkedIn ?> check-ins | <?= $remaining ?> aguardando entrada</span>
                             </div>
                             <div class="occupancy-meter" aria-label="<?= e($percent) ?>% ocupado">
                                 <i style="width: <?= e($percent) ?>%"></i>
@@ -1770,6 +1784,8 @@ try {
                     <?php
                     $capacity = max(1, (int) $session['capacity']);
                     $sold = (int) $session['sold'];
+                    $checkedIn = (int) $session['checked_in'];
+                    $remaining = max(0, $sold - $checkedIn);
                     $percent = min(100, round(($sold / $capacity) * 100));
                     ?>
                     <article class="session-tile">
@@ -1779,7 +1795,8 @@ try {
                             <span><?= e($session['room_name']) ?> | <?= e(ucfirst($session['audio_type'])) ?></span>
                         </div>
                         <div class="mini-meter"><i style="width: <?= e($percent) ?>%"></i></div>
-                        <small><?= $sold ?> vendidos | R$ <?= e(number_format($sold * (float) $session['price'], 2, ',', '.')) ?></small>
+                        <small><?= $sold ?> vendidos | <?= $checkedIn ?> check-ins | <?= $remaining ?> aguardando</small>
+                        <small>R$ <?= e(number_format($sold * (float) $session['price'], 2, ',', '.')) ?></small>
                     </article>
                 <?php endforeach; ?>
                 <?php if (!$sessionRows): ?><p class="muted">A grade aparece assim que houver sessões para a data selecionada.</p><?php endif; ?>
@@ -1793,6 +1810,7 @@ try {
                     <div class="room-sale-card">
                         <strong><?= e($room['room_name']) ?></strong>
                         <span><?= (int) $room['tickets'] ?> ingresso(s)</span>
+                        <span><?= (int) $room['checked_in'] ?> check-in(s) | <?= max(0, (int) $room['tickets'] - (int) $room['checked_in']) ?> restante(s)</span>
                         <b>R$ <?= e(number_format((float) $room['revenue'], 2, ',', '.')) ?></b>
                         <div class="room-revenue-meter"><i style="width: <?= e(min(100, ((float) $room['revenue'] / $maxRoomRevenue) * 100)) ?>%"></i></div>
                     </div>

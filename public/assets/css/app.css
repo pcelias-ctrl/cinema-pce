@@ -197,7 +197,7 @@ textarea { resize: vertical; }
     align-items: center;
     flex-wrap: wrap;
 }
-.cockpit-stats { grid-template-columns: 1.35fr repeat(3, 1fr) 1.1fr; }
+.cockpit-stats { grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); }
 .hero-stat {
     background: #00a65a;
     color: white;
@@ -205,6 +205,8 @@ textarea { resize: vertical; }
 }
 .hero-stat span { color: #f5dac5; }
 .hero-stat::after { background: rgba(255,255,255,.08); }
+.checkin-stat { border-top-color: #00a65a; }
+.remaining-stat { border-top-color: #f39c12; }
 .occupancy-stat { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 4px 12px; padding: 14px; }
 .occupancy-stat > span, .occupancy-stat > small { grid-column: 2; }
 .occupancy-stat > span { align-self: end; font-weight: 800; color: var(--ink); }
@@ -246,6 +248,7 @@ textarea { resize: vertical; }
 .occupancy-item strong,
 .occupancy-item span { display: block; }
 .occupancy-item span { color: var(--muted); font-size: 13px; margin-top: 3px; }
+.occupancy-item .checkin-line { color: #0f766e; font-weight: 800; }
 .occupancy-item b { text-align: right; }
 .occupancy-meter,
 .mini-meter {
