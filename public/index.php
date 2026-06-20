@@ -22,6 +22,9 @@ function db()
 function layout(string $title, callable $content): void
 {
     $user = Auth::user();
+    $currentRoute = $_GET['route'] ?? 'dashboard';
+    if ($currentRoute === '') $currentRoute = 'dashboard';
+    $navClass = static fn(string $route): string => $currentRoute === $route ? 'active' : '';
     ?>
     <!doctype html>
     <html lang="pt-br">
@@ -31,30 +34,54 @@ function layout(string $title, callable $content): void
         <title><?= e($title) ?> - <?= e(config_value('app_name')) ?></title>
         <link rel="stylesheet" href="assets/css/app.css">
     </head>
-    <body>
-        <header class="topbar">
-            <a class="brand" href="index.php">Cinema PCE</a>
-            <?php if ($user): ?>
+    <body class="<?= $user ? 'app-shell' : 'public-shell' ?>">
+        <?php if ($user): ?>
+            <button class="sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Abrir menu" title="Abrir menu">☰</button>
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-brand">
+                    <a class="brand" href="index.php">Cinema PCE</a>
+                    <span>Gestão & Bilheteria</span>
+                </div>
+                <div class="sidebar-user">
+                    <span><?= $user['role'] === 'administrador' ? 'Administrador' : 'Operador' ?></span>
+                    <strong><?= e($user['name']) ?></strong>
+                </div>
                 <nav>
                     <?php if ($user['role'] === 'administrador'): ?>
-                        <a href="index.php">Painel</a>
-                        <a href="index.php?route=movies">Filmes</a>
-                        <a href="index.php?route=rooms">Salas</a>
-                        <a href="index.php?route=showtimes">Sessões</a>
+                        <span class="nav-label">Gestão</span>
+                        <a class="<?= $navClass('dashboard') ?>" href="index.php"><i></i>Painel</a>
+                        <a class="<?= $navClass('movies') ?>" href="index.php?route=movies"><i></i>Filmes</a>
+                        <a class="<?= $navClass('rooms') ?>" href="index.php?route=rooms"><i></i>Salas</a>
+                        <a class="<?= $navClass('showtimes') ?>" href="index.php?route=showtimes"><i></i>Sessões</a>
                     <?php endif; ?>
-                    <a href="index.php?route=sales">Venda</a>
-                    <a href="index.php?route=cash_register">Caixa</a>
-                    <a href="index.php?route=qr_reader">Leitor QR</a>
+                    <span class="nav-label">Operação</span>
+                    <a class="<?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i>Venda</a>
+                    <a class="<?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i>Caixa</a>
+                    <a class="<?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i>Leitor QR</a>
                     <?php if ($user['role'] === 'administrador'): ?>
-                        <a href="index.php?route=users">Usuários</a>
+                        <a class="<?= $navClass('users') ?>" href="index.php?route=users"><i></i>Usuários</a>
                     <?php endif; ?>
-                    <a href="index.php?route=logout">Sair</a>
+                    <a class="logout-link" href="index.php?route=logout"><i></i>Sair</a>
                 </nav>
-            <?php endif; ?>
-        </header>
+            </aside>
+            <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="Fechar menu"></button>
+        <?php else: ?>
+            <header class="public-topbar"><a class="brand" href="index.php">Cinema PCE</a></header>
+        <?php endif; ?>
         <main class="page">
             <?php $content(); ?>
         </main>
+        <?php if ($user): ?>
+            <script>
+                (() => {
+                    const toggle = document.getElementById('sidebar-toggle');
+                    const backdrop = document.getElementById('sidebar-backdrop');
+                    const close = () => document.body.classList.remove('sidebar-open');
+                    toggle.addEventListener('click', () => document.body.classList.toggle('sidebar-open'));
+                    backdrop.addEventListener('click', close);
+                })();
+            </script>
+        <?php endif; ?>
     </body>
     </html>
     <?php
@@ -247,6 +274,12 @@ function current_query(array $overrides = []): string
 }
 
 try {
+    if ($route === 'health') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['status' => 'ok', 'service' => 'cinema-pce']);
+        exit;
+    }
+
     if ($route === 'login') {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
@@ -1387,8 +1420,12 @@ try {
     );
     $roomStmt->execute([$dashboardDate]);
     $roomRows = $roomStmt->fetchAll();
+    $totalCapacity = array_sum(array_map(static fn($row) => (int) $row['capacity'], $sessionRows));
+    $totalOccupied = array_sum(array_map(static fn($row) => (int) $row['sold'], $sessionRows));
+    $overallOccupancy = $totalCapacity > 0 ? min(100, round(($totalOccupied / $totalCapacity) * 100)) : 0;
+    $maxRoomRevenue = max(1, ...array_map(static fn($row) => (float) $row['revenue'], $roomRows ?: [['revenue' => 1]]));
 
-    layout('Painel', function () use ($stats, $dashboardDate, $sessionRows, $hourRows, $maxHourTickets, $roomRows) {
+    layout('Painel', function () use ($stats, $dashboardDate, $sessionRows, $hourRows, $maxHourTickets, $roomRows, $totalOccupied, $totalCapacity, $overallOccupancy, $maxRoomRevenue) {
         ?>
         <div class="section-head cockpit-head">
             <div>
@@ -1407,11 +1444,16 @@ try {
             <div class="stat"><strong><?= (int) $stats['tickets'] ?></strong><span>Ingressos vendidos</span></div>
             <div class="stat"><strong><?= (int) $stats['showtimes'] ?></strong><span>Sessões no dia</span></div>
             <div class="stat"><strong><?= (int) $stats['rooms'] ?></strong><span>Salas em operação</span></div>
+            <div class="stat occupancy-stat">
+                <div class="occupancy-ring" style="--value: <?= e($overallOccupancy) ?>"><strong><?= e($overallOccupancy) ?>%</strong></div>
+                <span>Ocupação geral</span>
+                <small><?= $totalOccupied ?>/<?= $totalCapacity ?> lugares</small>
+            </div>
         </div>
 
         <section class="cockpit-grid">
-            <div class="panel">
-                <h2>Ocupação das sessões</h2>
+            <div class="panel chart-panel">
+                <div class="panel-heading"><div><span class="eyebrow">Capacidade</span><h2>Ocupação das sessões</h2></div><span class="chart-legend">Ocupação por sessão</span></div>
                 <div class="occupancy-list">
                     <?php foreach ($sessionRows as $session): ?>
                         <?php
@@ -1434,8 +1476,8 @@ try {
                 </div>
             </div>
 
-            <div class="panel">
-                <h2>Vendas por horário</h2>
+            <div class="panel chart-panel">
+                <div class="panel-heading"><div><span class="eyebrow">Performance</span><h2>Vendas por horário</h2></div><span class="chart-legend">Ingressos e receita</span></div>
                 <div class="bar-chart">
                     <?php foreach ($hourRows as $hour): ?>
                         <?php $height = 12 + (((int) $hour['tickets'] / $maxHourTickets) * 88); ?>
@@ -1481,6 +1523,7 @@ try {
                         <strong><?= e($room['room_name']) ?></strong>
                         <span><?= (int) $room['tickets'] ?> ingresso(s)</span>
                         <b>R$ <?= e(number_format((float) $room['revenue'], 2, ',', '.')) ?></b>
+                        <div class="room-revenue-meter"><i style="width: <?= e(min(100, ((float) $room['revenue'] / $maxRoomRevenue) * 100)) ?>%"></i></div>
                     </div>
                 <?php endforeach; ?>
                 <?php if (!$roomRows): ?><p class="muted">Sem vendas por sala nesta data.</p><?php endif; ?>
