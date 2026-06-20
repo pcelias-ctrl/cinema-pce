@@ -52,8 +52,12 @@ h2 { font-size: 16px; font-weight: 600; }
     box-shadow: 16px 0 42px rgba(20, 32, 29, .16);
 }
 .sidebar-brand { padding: 0 10px 14px; border-bottom: 1px solid rgba(255,255,255,.10); }
-.sidebar-brand .brand { display: block; font-size: 19px; }
+.sidebar-brand .brand { display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 19px; }
+.sidebar-brand .brand img { width: 34px; height: 34px; flex: 0 0 auto; object-fit: contain; border-radius: 3px; background: white; }
+.sidebar-brand .brand strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-brand span { display: block; margin-top: 4px; color: #aebdb8; font-size: 11px; font-weight: 700; }
+.public-topbar .brand { display: flex; align-items: center; gap: 10px; }
+.public-topbar .brand img { width: 38px; height: 38px; object-fit: contain; border-radius: 3px; background: white; }
 .sidebar-user {
     display: grid;
     gap: 3px;
@@ -657,6 +661,9 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .settings-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .check-label { display: inline-flex; align-items: center; gap: 7px; color: var(--ink); }
 .check-label input { width: 16px; height: 16px; margin: 0; padding: 0; accent-color: var(--brand); }
+.logo-upload-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding-top: 4px; }
+.logo-upload-row > label:not(.check-label) { flex: 1 1 280px; }
+.cinema-logo-preview { width: 120px; height: 72px; padding: 5px; object-fit: contain; border: 1px solid var(--line); border-radius: 4px; background: white; }
 .room-editor { overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #e7dfd2; padding: 16px; }
 .room-canvas {
     position: relative;

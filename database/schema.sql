@@ -24,6 +24,8 @@ CREATE TABLE cinema_settings (
     whatsapp VARCHAR(30) NULL,
     phone VARCHAR(30) NULL,
     email VARCHAR(180) NULL,
+    logo_mime VARCHAR(80) NULL,
+    logo_data LONGBLOB NULL,
     smtp_enabled TINYINT(1) NOT NULL DEFAULT 0,
     smtp_host VARCHAR(255) NULL,
     smtp_port SMALLINT UNSIGNED NOT NULL DEFAULT 587,

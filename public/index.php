@@ -22,6 +22,7 @@ function db()
 function layout(string $title, callable $content): void
 {
     $user = Auth::user();
+    $cinema = cinema_settings();
     $currentRoute = $_GET['route'] ?? 'dashboard';
     if ($currentRoute === '') $currentRoute = 'dashboard';
     $navClass = static fn(string $route): string => $currentRoute === $route ? 'active' : '';
@@ -31,7 +32,7 @@ function layout(string $title, callable $content): void
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title><?= e($title) ?> - <?= e(config_value('app_name')) ?></title>
+        <title><?= e($title) ?> - <?= e($cinema['cinema_name']) ?></title>
         <link rel="stylesheet" href="assets/vendor/adminlte/css/adminlte.min.css">
         <link rel="stylesheet" href="assets/css/app.css">
     </head>
@@ -46,7 +47,10 @@ function layout(string $title, callable $content): void
             </nav>
             <aside class="app-sidebar sidebar bg-body-secondary shadow" data-bs-theme="dark">
                 <div class="sidebar-brand">
-                    <a class="brand" href="index.php">Cinema PCE</a>
+                    <a class="brand" href="index.php">
+                        <?php if ($cinema['has_logo']): ?><img src="index.php?route=cinema_logo" alt="<?= e($cinema['cinema_name']) ?>"><?php endif; ?>
+                        <strong><?= e($cinema['cinema_name']) ?></strong>
+                    </a>
                     <span>Gestão & Bilheteria</span>
                 </div>
                 <div class="sidebar-user">
@@ -77,7 +81,7 @@ function layout(string $title, callable $content): void
                 </div>
             </aside>
         <?php else: ?>
-            <header class="public-topbar"><a class="brand" href="index.php">Cinema PCE</a></header>
+            <header class="public-topbar"><a class="brand" href="index.php"><?php if ($cinema['has_logo']): ?><img src="index.php?route=cinema_logo" alt=""><?php endif; ?><strong><?= e($cinema['cinema_name']) ?></strong></a></header>
         <?php endif; ?>
         <main class="<?= $user ? 'app-main' : '' ?>">
           <div class="<?= $user ? 'app-content' : '' ?>">
@@ -117,6 +121,24 @@ function save_movie_cover(array $file): ?array
         throw new RuntimeException('Não foi possível ler a capa enviada.');
     }
 
+    return ['mime' => $info['mime'], 'data' => $data];
+}
+
+function save_cinema_logo(array $file): ?array
+{
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('Falha no upload do logotipo.');
+    }
+    if (($file['size'] ?? 0) > 3 * 1024 * 1024) {
+        throw new RuntimeException('O logotipo deve ter no máximo 3 MB.');
+    }
+    $info = getimagesize($file['tmp_name']);
+    if (!$info || !in_array($info['mime'], ['image/jpeg', 'image/png', 'image/webp'], true)) {
+        throw new RuntimeException('O logotipo precisa ser JPG, PNG ou WEBP.');
+    }
+    $data = file_get_contents($file['tmp_name']);
+    if ($data === false) throw new RuntimeException('Não foi possível ler o logotipo enviado.');
     return ['mime' => $info['mime'], 'data' => $data];
 }
 
@@ -250,13 +272,13 @@ function cinema_settings(): array
 
     $defaults = [
         'id' => 1, 'cinema_name' => config_value('app_name'), 'cnpj' => '', 'address' => '',
-        'whatsapp' => '', 'phone' => '', 'email' => '', 'smtp_enabled' => 0,
+        'whatsapp' => '', 'phone' => '', 'email' => '', 'has_logo' => false, 'smtp_enabled' => 0,
         'smtp_host' => '', 'smtp_port' => 587, 'smtp_encryption' => 'tls', 'smtp_auth' => 1,
         'smtp_username' => '', 'smtp_password_encrypted' => '', 'smtp_from_name' => '',
         'smtp_from_email' => '', 'smtp_reply_to' => '', 'smtp_timeout' => 30,
     ];
     try {
-        $row = db()->query('SELECT * FROM cinema_settings WHERE id = 1')->fetch();
+        $row = db()->query('SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1')->fetch();
         $settings = array_merge($defaults, $row ?: []);
     } catch (Throwable $exception) {
         $settings = $defaults;
@@ -274,6 +296,8 @@ function ensure_cinema_settings_table(): void
         whatsapp VARCHAR(30) NULL,
         phone VARCHAR(30) NULL,
         email VARCHAR(180) NULL,
+        logo_mime VARCHAR(80) NULL,
+        logo_data LONGBLOB NULL,
         smtp_enabled TINYINT(1) NOT NULL DEFAULT 0,
         smtp_host VARCHAR(255) NULL,
         smtp_port SMALLINT UNSIGNED NOT NULL DEFAULT 587,
@@ -288,6 +312,10 @@ function ensure_cinema_settings_table(): void
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    $logoColumn = db()->query("SHOW COLUMNS FROM cinema_settings LIKE 'logo_mime'")->fetch();
+    if (!$logoColumn) {
+        db()->exec('ALTER TABLE cinema_settings ADD COLUMN logo_mime VARCHAR(80) NULL AFTER email, ADD COLUMN logo_data LONGBLOB NULL AFTER logo_mime');
+    }
     db()->exec("INSERT INTO cinema_settings (id, cinema_name) VALUES (1, 'Cinema PCE') ON DUPLICATE KEY UPDATE id=id");
 }
 
@@ -361,6 +389,22 @@ try {
         exit;
     }
 
+    if ($route === 'cinema_logo') {
+        try {
+            $logo = db()->query('SELECT logo_mime, logo_data FROM cinema_settings WHERE id = 1 AND logo_data IS NOT NULL LIMIT 1')->fetch();
+        } catch (Throwable $exception) {
+            $logo = false;
+        }
+        if (!$logo) {
+            http_response_code(404);
+            exit;
+        }
+        header('Content-Type: ' . $logo['logo_mime']);
+        header('Cache-Control: private, max-age=3600');
+        echo $logo['logo_data'];
+        exit;
+    }
+
     if ($route === 'login') {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
@@ -401,11 +445,12 @@ try {
     if ($route === 'cinema_settings') {
         Auth::requireAdmin();
         ensure_cinema_settings_table();
-        $stmt = db()->query('SELECT * FROM cinema_settings WHERE id = 1');
+        $stmt = db()->query('SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1');
         $settings = $stmt->fetch() ?: cinema_settings();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
+            $logo = save_cinema_logo($_FILES['logo'] ?? []);
             $password = trim($_POST['smtp_password'] ?? '');
             $encryptedPassword = $password !== '' ? encrypt_setting($password) : ($settings['smtp_password_encrypted'] ?? '');
             $encryption = in_array($_POST['smtp_encryption'] ?? '', ['none', 'tls', 'ssl'], true) ? $_POST['smtp_encryption'] : 'tls';
@@ -433,13 +478,19 @@ try {
                 trim($_POST['smtp_reply_to'] ?? '') ?: null,
                 max(1, (int) ($_POST['smtp_timeout'] ?? 30)),
             ]);
+            if (isset($_POST['remove_logo'])) {
+                db()->exec('UPDATE cinema_settings SET logo_mime = NULL, logo_data = NULL WHERE id = 1');
+            } elseif ($logo) {
+                $saveLogo = db()->prepare('UPDATE cinema_settings SET logo_mime = ?, logo_data = ? WHERE id = 1');
+                $saveLogo->execute([$logo['mime'], $logo['data']]);
+            }
             redirect_to('cinema_settings');
         }
 
         layout('Configurações do Cinema', function () use ($settings) {
             ?>
             <div class="section-head"><div><h1>Configurações do Cinema</h1><p class="muted">Dados institucionais e envio de e-mails.</p></div></div>
-            <form method="post" class="form wide">
+            <form method="post" enctype="multipart/form-data" class="form wide">
                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                 <section class="panel settings-section">
                     <h2>Dados do cinema</h2>
@@ -451,6 +502,11 @@ try {
                         <label>Telefone<input name="phone" value="<?= e($settings['phone']) ?>" placeholder="(00) 0000-0000"></label>
                     </div>
                     <label>Endereço<textarea name="address" rows="3"><?= e($settings['address']) ?></textarea></label>
+                    <div class="logo-upload-row">
+                        <?php if ($settings['has_logo']): ?><img class="cinema-logo-preview" src="index.php?route=cinema_logo" alt="Logotipo atual"><?php endif; ?>
+                        <label>Logotipo do cinema<input name="logo" type="file" accept="image/jpeg,image/png,image/webp"><small>JPG, PNG ou WEBP, até 3 MB. O arquivo será salvo no banco de dados.</small></label>
+                        <?php if ($settings['has_logo']): ?><label class="check-label"><input type="checkbox" name="remove_logo" value="1"> Remover logotipo atual</label><?php endif; ?>
+                    </div>
                 </section>
                 <section class="panel settings-section">
                     <div class="settings-title"><h2>Servidor SMTP</h2><label class="check-label"><input type="checkbox" name="smtp_enabled" value="1" <?= $settings['smtp_enabled'] ? 'checked' : '' ?>> Ativar envio de e-mails</label></div>
@@ -1343,20 +1399,22 @@ try {
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Recibo <?= e($first['sale_code']) ?></title>
             <style>
-                *{box-sizing:border-box} body{margin:0;background:#fff;color:#111;font:13px Arial,sans-serif}
+                *{box-sizing:border-box} html,body{margin:0;background:#fff;color:#000} body{font:12px/1.25 "Courier New",Courier,monospace}
                 .actions{display:flex;justify-content:center;gap:8px;padding:14px;background:#f3f3f3}
                 .actions button{padding:9px 14px;border:0;border-radius:3px;background:#c2410c;color:#fff;font-weight:700;cursor:pointer}
-                .receipt{width:80mm;max-width:100%;margin:0 auto;padding:8mm 5mm;text-align:left}
-                h1{margin:0 0 3px;text-align:center;font-size:20px} .company{text-align:center;margin-bottom:14px;color:#444}
-                .line{border-top:1px dashed #777;margin:10px 0} p{margin:5px 0;line-height:1.35}
-                #ticket-qr{width:170px;height:170px;margin:14px auto 6px} #ticket-qr canvas,#ticket-qr img{width:170px!important;height:170px!important;display:block}
-                .code{text-align:center;font-size:9px;word-break:break-all}.thanks{text-align:center;margin-top:12px;font-weight:700}
-                @media print{.actions{display:none}.receipt{width:100%;padding:0} @page{margin:7mm}}
+                .receipt{width:40ch;max-width:calc(100% - 8mm);margin:0 auto;padding:4mm 0;text-align:left;overflow-wrap:anywhere}
+                .receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}
+                h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
+                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}
+                #ticket-qr{width:36mm;height:36mm;margin:8px auto 4px}#ticket-qr canvas,#ticket-qr img{width:36mm!important;height:36mm!important;display:block}
+                .code{text-align:center;font-size:8px;word-break:break-all}.thanks{text-align:center;margin-top:8px;font-weight:700}
+                @media print{.actions{display:none}.receipt{width:40ch;max-width:none;padding:0}@page{size:80mm auto;margin:3mm}}
             </style>
         </head>
         <body>
             <div class="actions"><button onclick="window.print()">Imprimir / salvar PDF</button></div>
             <main class="receipt">
+                <?php if ($cinema['has_logo']): ?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif; ?>
                 <h1><?= e($cinema['cinema_name']) ?></h1>
                 <div class="company">
                     <?php if ($cinema['cnpj']): ?>CNPJ <?= e($cinema['cnpj']) ?><br><?php endif; ?>
