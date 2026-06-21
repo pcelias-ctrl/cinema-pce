@@ -37,7 +37,7 @@ function layout(string $title, callable $content): void
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?= e($title) ?> - <?= e($cinema['cinema_name']) ?></title>
         <link rel="stylesheet" href="/assets/vendor/adminlte/css/adminlte.min.css">
-        <link rel="stylesheet" href="/assets/css/app.css">
+        <link rel="stylesheet" href="/assets/css/app.css?v=20260621">
     </head>
     <body class="layout-fixed sidebar-expand-lg bg-body-tertiary route-<?= e(str_replace('_', '-', $currentRoute)) ?> <?= $user ? 'app-shell' : 'public-shell' ?>">
       <div class="app-wrapper">
