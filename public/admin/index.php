@@ -1892,7 +1892,7 @@ try {
             <script>
                 (function () {
                     const printUrl = <?= json_encode($combinedPrintUrl, JSON_UNESCAPED_SLASHES) ?>;
-                    const popup = window.open(printUrl, 'cinema_sale_print_<?= e(preg_replace('/\W+/', '_', $first['sale_code'])) ?>', 'popup=yes,width=420,height=720');
+                    const popup = window.open(printUrl, 'cinema_sale_print_pending', 'popup=yes,width=420,height=720');
                     if (popup) popup.focus();
                 })();
             </script>

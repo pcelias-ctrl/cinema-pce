@@ -110,5 +110,14 @@
     });
     form.addEventListener('change', update);
     form.addEventListener('input', update);
+    form.addEventListener('submit', () => {
+        if (selectedSeats().length === 0 || finishButton.disabled) return;
+        const popup = window.open('', 'cinema_sale_print_pending', 'popup=yes,width=420,height=720');
+        if (!popup) return;
+        popup.document.open();
+        popup.document.write('<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><title>Preparando impressao</title><style>body{margin:0;display:grid;min-height:100vh;place-items:center;font:14px Arial,sans-serif;color:#111;background:#fff}main{width:260px;text-align:center}strong{display:block;margin-bottom:8px;font-size:18px}</style></head><body><main><strong>Preparando impressao</strong><p>Aguarde a finalizacao da venda.</p></main></body></html>');
+        popup.document.close();
+        popup.focus();
+    });
     update();
 })();
