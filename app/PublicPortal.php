@@ -16,7 +16,7 @@ final class PublicPortal
         $db->exec("CREATE TABLE IF NOT EXISTS public_portal_settings (
             id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1, sales_enabled TINYINT(1) NOT NULL DEFAULT 0,
             hold_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 10,
-            payment_gateway ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme',
+            payment_gateway ENUM('pagarme','infinitepay','mixed') NOT NULL DEFAULT 'pagarme',
             pagarme_public_key VARCHAR(190) NULL, pagarme_secret_encrypted TEXT NULL, pagarme_webhook_secret_encrypted TEXT NULL,
             pagarme_webhook_username VARCHAR(190) NULL, pagarme_webhook_password_encrypted TEXT NULL,
             infinitepay_handle VARCHAR(190) NULL,
@@ -77,6 +77,8 @@ final class PublicPortal
         self::ensureColumns($db, 'public_login_tokens', [
             'attempts' => 'TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER token_hash',
         ]);
+        $gatewayColumn=$db->query("SHOW COLUMNS FROM public_portal_settings LIKE 'payment_gateway'")->fetch();
+        if($gatewayColumn&&!str_contains((string)$gatewayColumn['Type'],"'mixed'"))$db->exec("ALTER TABLE public_portal_settings MODIFY payment_gateway ENUM('pagarme','infinitepay','mixed') NOT NULL DEFAULT 'pagarme'");
         $db->exec("UPDATE public_portal_settings SET pagarme_webhook_password_encrypted=pagarme_webhook_secret_encrypted WHERE pagarme_webhook_password_encrypted IS NULL AND pagarme_webhook_secret_encrypted IS NOT NULL");
 
         $db->exec("CREATE TABLE IF NOT EXISTS public_seat_holds (

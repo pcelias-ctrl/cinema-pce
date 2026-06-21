@@ -232,7 +232,7 @@ CREATE TABLE public_portal_settings (
     id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
     sales_enabled TINYINT(1) NOT NULL DEFAULT 0,
     hold_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 10,
-    payment_gateway ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme',
+    payment_gateway ENUM('pagarme','infinitepay','mixed') NOT NULL DEFAULT 'pagarme',
     pagarme_public_key VARCHAR(190) NULL,
     pagarme_secret_encrypted TEXT NULL,
     pagarme_webhook_secret_encrypted TEXT NULL,
