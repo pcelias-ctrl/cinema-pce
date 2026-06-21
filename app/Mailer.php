@@ -56,7 +56,7 @@ final class Mailer
             if ($attachments) {
                 $boundary = 'cinesys_' . bin2hex(random_bytes(16));
                 $headers[] = 'Content-Type: multipart/mixed; boundary="' . $boundary . '"';
-                $body = '--' . $boundary . "\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $html . "\r\n";
+                $body = '--' . $boundary . "\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($html), 76, "\r\n");
                 foreach ($attachments as $attachment) {
                     $filename = preg_replace('/[^A-Za-z0-9._-]/', '-', (string)($attachment['name'] ?? 'arquivo.pdf')) ?: 'arquivo.pdf';
                     $mime = (string)($attachment['mime'] ?? 'application/octet-stream');
@@ -65,8 +65,8 @@ final class Mailer
                 $body .= '--' . $boundary . "--\r\n";
             } else {
                 $headers[] = 'Content-Type: text/html; charset=UTF-8';
-                $headers[] = 'Content-Transfer-Encoding: 8bit';
-                $body = $html;
+                $headers[] = 'Content-Transfer-Encoding: base64';
+                $body = chunk_split(base64_encode($html), 76, "\r\n");
             }
             $message = implode("\r\n", $headers) . "\r\n\r\n" . str_replace(["\r\n", "\r"], "\n", $body);
             $message = preg_replace('/^\./m', '..', $message);
