@@ -193,11 +193,15 @@ p { line-height:1.5; }
   .portal-brand img { width:40px; height:40px; flex-basis:40px; border-radius:11px; padding:6px; }
   .portal-menu-toggle { display:grid; }
   .portal-header nav { width:auto; flex:0 0 auto; display:flex; align-items:center; gap:3px; padding:0; border:0; }
-  .portal-header nav.open { display:flex; animation:none; }
+  .portal-header nav.open { position:absolute; left:10px; right:10px; top:66px; width:auto; display:flex; align-items:stretch; flex-direction:column; gap:6px; padding:9px; border:1px solid rgba(244,196,78,.18); border-radius:12px; background:#070706; box-shadow:0 16px 34px rgba(0,0,0,.24); animation:menu-in .16s ease both; }
   .portal-header nav a { width:40px; min-height:40px; padding:0; border-radius:11px; font-size:0; background:transparent; }
   .portal-header nav a > span:last-child { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
   .portal-header nav .login-link { width:40px; justify-content:center; margin:0; font-size:0; }
-  .portal-header nav a[href="/?action=register"] { display:none; }
+  .portal-header nav a[href="/?action=register"],.portal-header nav a[href="/?action=logout"] { display:none; }
+  .portal-header nav.open a { width:100%; min-height:44px; justify-content:flex-start; gap:10px; padding:9px 11px; border-radius:10px; background:#14100e; font-size:12px; }
+  .portal-header nav.open a > span:last-child { position:static; width:auto; height:auto; overflow:visible; clip:auto; white-space:normal; }
+  .portal-header nav.open a[href="/?action=register"],.portal-header nav.open a[href="/?action=logout"] { display:flex; }
+  .portal-header nav.open .login-link { width:100%; justify-content:flex-start; font-size:12px; }
   .portal-main { width:min(100% - 20px,1180px); padding-top:17px; }
   h1 { font-size:24px; }
   .date-rail { grid-template-columns:repeat(7,72px); }

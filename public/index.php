@@ -148,7 +148,7 @@ if ($action === 'google_callback') {
         $verifyCurl=curl_init('https://oauth2.googleapis.com/tokeninfo?id_token='.rawurlencode($tokens['id_token']));curl_setopt_array($verifyCurl,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_TIMEOUT=>20]);$profile=json_decode((string)curl_exec($verifyCurl),true);$verifyStatus=(int)curl_getinfo($verifyCurl,CURLINFO_HTTP_CODE);curl_close($verifyCurl);
         if($verifyStatus!==200||($profile['aud']??'')!==$portalSettings['google_client_id']||($profile['email_verified']??'')!=='true')throw new RuntimeException('Não foi possível validar o e-mail Google.');
         $stmt=$db->prepare('SELECT id FROM public_customers WHERE google_sub=? OR email=? LIMIT 1');$stmt->execute([(string)$profile['sub'],strtolower((string)$profile['email'])]);$existing=$stmt->fetch();
-        if($existing){$db->prepare('UPDATE public_customers SET google_sub=?,email_verified_at=COALESCE(email_verified_at,NOW()) WHERE id=?')->execute([(string)$profile['sub'],(int)$existing['id']]);$_SESSION['public_customer_id']=(int)$existing['id'];session_regenerate_id(true);header('Location: /?action=account');exit;}
+        if($existing){$db->prepare('UPDATE public_customers SET google_sub=?,email_verified_at=COALESCE(email_verified_at,NOW()) WHERE id=?')->execute([(string)$profile['sub'],(int)$existing['id']]);$_SESSION['public_customer_id']=(int)$existing['id'];session_regenerate_id(true);$returnTo=$_SESSION['public_return']??'/';unset($_SESSION['public_return']);header('Location: '.$returnTo);exit;}
         $_SESSION['google_pending']=['sub'=>(string)$profile['sub'],'email'=>strtolower((string)$profile['email']),'name'=>(string)($profile['name']??'')];
         header('Location: /?action=google_complete');exit;
     }catch(Throwable $exception){$error=$exception->getMessage();$action='access';}
@@ -240,7 +240,7 @@ if ($action === 'tickets_pdf' || $action === 'products_pdf') {
 
 if ($action === 'token') {
     if (PublicPortal::consumeLoginToken($db, trim($_GET['token'] ?? ''))) {
-        $returnTo = $_SESSION['public_return'] ?? '/?action=account';
+        $returnTo = $_SESSION['public_return'] ?? '/';
         unset($_SESSION['public_return']);
         header('Location: ' . $returnTo);
         exit;
@@ -334,7 +334,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email = strtolower(trim((string) ($_SESSION['public_pending_email'] ?? $_POST['email'] ?? '')));
         $code = PublicPortal::normalizeDigits($_POST['code'] ?? '');
         if (PublicPortal::consumeLoginCode($db, $email, $code)) {
-            $returnTo = $_SESSION['public_return'] ?? '/?action=account';
+            $returnTo = $_SESSION['public_return'] ?? '/';
             unset($_SESSION['public_return']);
             header('Location: ' . $returnTo);
             exit;
@@ -348,7 +348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if(!PublicPortal::validCpf($cpf)||strlen($whatsapp)<10||strlen($phone)<10)throw new RuntimeException('Informe CPF, WhatsApp e telefone válidos.');
             if(empty($_POST['privacy_accept']))throw new RuntimeException('É necessário aceitar a Política de Privacidade.');
             $stmt=$db->prepare('INSERT INTO public_customers(name,cpf,email,whatsapp,phone,address,google_sub,email_verified_at,privacy_accepted_at) VALUES(?,?,?,?,?,?,?,NOW(),NOW())');$stmt->execute([$pending['name'],$cpf,$pending['email'],$whatsapp,$phone,$address,$pending['sub']]);
-            $_SESSION['public_customer_id']=(int)$db->lastInsertId();unset($_SESSION['google_pending']);session_regenerate_id(true);header('Location: /?action=account');exit;
+            $_SESSION['public_customer_id']=(int)$db->lastInsertId();unset($_SESSION['google_pending']);session_regenerate_id(true);$returnTo=$_SESSION['public_return']??'/';unset($_SESSION['public_return']);header('Location: '.$returnTo);exit;
         }catch(PDOException $exception){$error=(string)$exception->getCode()==='23000'?'Este CPF já está vinculado a outra conta.':$exception->getMessage();}catch(Throwable $exception){$error=$exception->getMessage();}
     } elseif ($action === 'register') {
         try {
@@ -459,7 +459,7 @@ function public_layout(string $title, array $cinema, ?array $customer, string $a
 {
     ?>
     <!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#172033"><title><?= e($title) ?> - <?= e($cinema['cinema_name']) ?></title><link rel="stylesheet" href="/assets/css/portal.css"></head>
-    <body><header class="portal-header"><a class="portal-brand" href="/"><?php if($cinema['has_logo']):?><img src="/?action=logo" alt=""><?php endif;?><strong><?=e($cinema['cinema_name'])?></strong></a><button class="portal-menu-toggle" type="button" aria-label="Abrir menu" aria-controls="portal-nav" aria-expanded="false"><span></span><span></span><span></span></button><nav id="portal-nav"><?php if(!$customer):?><a class="login-link" href="/?action=access"><span class="nav-icon nav-icon-login" aria-hidden="true"></span><span>ENTRAR</span></a><?php endif;?><a href="/"><span class="nav-icon nav-icon-sessions" aria-hidden="true"></span><span>Sessões</span></a><?php if($customer):?><a href="/?action=account"><span class="nav-icon nav-icon-ticket" aria-hidden="true"></span><span>Meus ingressos</span></a><a href="/?action=logout"><span class="nav-icon nav-icon-exit" aria-hidden="true"></span><span>Sair</span></a><?php else:?><a href="/?action=register"><span class="nav-icon nav-icon-user" aria-hidden="true"></span><span>Criar conta</span></a><?php endif;?></nav></header>
+    <body><header class="portal-header"><a class="portal-brand" href="/"><?php if($cinema['has_logo']):?><img src="/?action=logo" alt=""><?php endif;?><strong><?=e($cinema['cinema_name'])?></strong></a><button class="portal-menu-toggle" type="button" aria-label="Abrir menu" aria-controls="portal-nav" aria-expanded="false"><span></span><span></span><span></span></button><nav id="portal-nav"><a href="/"><span class="nav-icon nav-icon-ticket" aria-hidden="true"></span><span>Comprar ingressos</span></a><?php if($customer):?><a class="account-link" href="/?action=account"><span class="nav-icon nav-icon-user" aria-hidden="true"></span><span>Meus ingressos</span></a><a href="/?action=logout"><span class="nav-icon nav-icon-exit" aria-hidden="true"></span><span>Sair</span></a><?php else:?><a class="login-link" href="/?action=access"><span class="nav-icon nav-icon-user" aria-hidden="true"></span><span>ENTRAR</span></a><a href="/?action=register"><span class="nav-icon nav-icon-login" aria-hidden="true"></span><span>Criar conta</span></a><?php endif;?></nav></header>
     <main class="portal-main"><?php if($message):?><p class="portal-notice success"><?=e($message)?></p><?php endif;?><?php if($error):?><p class="portal-notice error"><?=e($error)?></p><?php endif;?><?php $content();?></main>
     <footer class="portal-footer"><div><strong><?=e($cinema['cinema_name'])?></strong><span><?=e($cinema['address'])?></span><?php $phoneLink=public_phone_link((string)($cinema['phone']??''),'Telefone');$whatsappLink=public_phone_link((string)($cinema['whatsapp']??''),'WhatsApp','whatsapp');?><span class="footer-contact"><?php if($phoneLink):?><?=$phoneLink?><?php endif;?><?php if($phoneLink&&$whatsappLink):?><i></i><?php endif;?><?php if($whatsappLink):?><?=$whatsappLink?><?php endif;?><?php if(!empty($cinema['email'])):?><i></i><a href="mailto:<?=e($cinema['email'])?>"><?=e($cinema['email'])?></a><?php endif;?></span><span class="developer-credit">Desenvolvido por Paulo Elias. <a href="tel:+5519981498510">(19) 98149-8510</a>.</span></div><nav><a href="/?action=privacy">Privacidade</a><a href="/?action=cookies">Cookies</a></nav></footer>
     <section class="cookie-banner" id="cookie-banner" hidden><div><strong>Privacidade e cookies</strong><p>Usamos cookies essenciais para manter sua sessão, proteger a compra e guardar suas preferências.</p></div><div><a href="/?action=cookies">Saiba mais</a><button type="button" data-cookie-choice="essential">Somente essenciais</button><button type="button" class="primary" data-cookie-choice="all">Aceitar todos</button></div></section><script src="/assets/js/vendor/qrcode.min.js"></script><script src="/assets/js/portal.js?v=<?=e((string)filemtime(__DIR__.'/assets/js/portal.js'))?>"></script></body></html>
