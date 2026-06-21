@@ -159,18 +159,16 @@ final class PublicPortal
     public static function createLoginToken(PDO $db, int $customerId): string
     {
         $token = bin2hex(random_bytes(32));
-        $expires = (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->modify('+20 minutes')->format('Y-m-d H:i:s');
         $db->prepare('DELETE FROM public_login_tokens WHERE customer_id=? OR expires_at<=NOW()')->execute([$customerId]);
-        $db->prepare('INSERT INTO public_login_tokens(customer_id,token_hash,expires_at) VALUES(?,?,?)')->execute([$customerId, hash('sha256', $token), $expires]);
+        $db->prepare('INSERT INTO public_login_tokens(customer_id,token_hash,expires_at) VALUES(?,?,DATE_ADD(NOW(), INTERVAL 20 MINUTE))')->execute([$customerId, hash('sha256', $token)]);
         return $token;
     }
 
     public static function createLoginCode(PDO $db, int $customerId): string
     {
         $code = (string) random_int(100000, 999999);
-        $expires = (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->modify('+10 minutes')->format('Y-m-d H:i:s');
         $db->prepare('DELETE FROM public_login_tokens WHERE customer_id=? OR expires_at<=NOW()')->execute([$customerId]);
-        $db->prepare('INSERT INTO public_login_tokens(customer_id,token_hash,attempts,expires_at) VALUES(?,?,0,?)')->execute([$customerId, hash('sha256', $code), $expires]);
+        $db->prepare('INSERT INTO public_login_tokens(customer_id,token_hash,attempts,expires_at) VALUES(?,?,0,DATE_ADD(NOW(), INTERVAL 10 MINUTE))')->execute([$customerId, hash('sha256', $code)]);
         return $code;
     }
 
