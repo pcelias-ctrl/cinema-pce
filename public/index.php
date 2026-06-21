@@ -32,8 +32,8 @@ function confirm_infinitepay_order(PDO $db, array $settings, array $order, array
 {
     $verified=InfinitePay::verifyPayment($settings,$payload);
     $expectedAmount=(int)round((float)$order['total_amount']*100);
-    $paidAmount=(int)($verified['paid_amount']??$verified['amount']??0);
-    if(empty($verified['paid'])||$paidAmount!==$expectedAmount)return false;
+    $chargedAmount=(int)($verified['amount']??0);$paidAmount=(int)($verified['paid_amount']??0);
+    if(empty($verified['paid'])||$chargedAmount!==$expectedAmount||$paidAmount<$expectedAmount)return false;
     $method=($verified['capture_method']??$payload['capture_method']??'pix')==='credit_card'?'cartao':'pix';
     $transaction=(string)($payload['transaction_nsu']??$payload['transaction_id']??'');
     $slug=(string)($payload['slug']??$payload['invoice_slug']??'');
