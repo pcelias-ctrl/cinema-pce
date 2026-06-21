@@ -9,7 +9,7 @@ use RuntimeException;
 
 final class Mailer
 {
-    public static function send(PDO $db, string $to, string $subject, string $html): void
+    public static function send(PDO $db, string $to, string $subject, string $html, array $attachments = []): void
     {
         $settings = $db->query('SELECT cinema_name,email,smtp_enabled,smtp_host,smtp_port,smtp_encryption,smtp_auth,smtp_username,smtp_password_encrypted,smtp_from_name,smtp_from_email,smtp_reply_to,smtp_timeout FROM cinema_settings WHERE id=1')->fetch();
         if (!$settings || !(int) $settings['smtp_enabled'] || !$settings['smtp_host']) {
@@ -51,11 +51,24 @@ final class Mailer
                 'To: <' . $to . '>',
                 'Subject: =?UTF-8?B?' . base64_encode($subject) . '?=',
                 'MIME-Version: 1.0',
-                'Content-Type: text/html; charset=UTF-8',
-                'Content-Transfer-Encoding: 8bit',
             ];
             if ($settings['smtp_reply_to']) $headers[] = 'Reply-To: ' . $settings['smtp_reply_to'];
-            $message = implode("\r\n", $headers) . "\r\n\r\n" . str_replace(["\r\n", "\r"], "\n", $html);
+            if ($attachments) {
+                $boundary = 'cinesys_' . bin2hex(random_bytes(16));
+                $headers[] = 'Content-Type: multipart/mixed; boundary="' . $boundary . '"';
+                $body = '--' . $boundary . "\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n" . $html . "\r\n";
+                foreach ($attachments as $attachment) {
+                    $filename = preg_replace('/[^A-Za-z0-9._-]/', '-', (string)($attachment['name'] ?? 'arquivo.pdf')) ?: 'arquivo.pdf';
+                    $mime = (string)($attachment['mime'] ?? 'application/octet-stream');
+                    $body .= '--' . $boundary . "\r\nContent-Type: " . $mime . '; name="' . $filename . "\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"" . $filename . "\"\r\n\r\n" . chunk_split(base64_encode((string)($attachment['data'] ?? '')), 76, "\r\n");
+                }
+                $body .= '--' . $boundary . "--\r\n";
+            } else {
+                $headers[] = 'Content-Type: text/html; charset=UTF-8';
+                $headers[] = 'Content-Transfer-Encoding: 8bit';
+                $body = $html;
+            }
+            $message = implode("\r\n", $headers) . "\r\n\r\n" . str_replace(["\r\n", "\r"], "\n", $body);
             $message = preg_replace('/^\./m', '..', $message);
             fwrite($socket, str_replace("\n", "\r\n", $message) . "\r\n.\r\n");
             self::expect($socket, [250]);
