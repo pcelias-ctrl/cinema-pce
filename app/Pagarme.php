@@ -71,7 +71,7 @@ final class Pagarme
                 'name'=>(string)$item['description'],'amount'=>(int)$item['amount'],'default_quantity'=>(int)$item['quantity'],
             ],$items)],
             'customer_settings' => ['customer'=>[
-                'name'=>$customer['name'],'email'=>$customer['email'],'document_type'=>'CPF','document'=>$customer['cpf'],
+                'name'=>$customer['name'],'email'=>$customer['email'],'type'=>'individual','document_type'=>'CPF','document'=>$customer['cpf'],
             ]],
         ];
         $response = self::request('POST', '/paymentlinks', $secret, $payload, $order['order_code']);
