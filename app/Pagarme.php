@@ -9,6 +9,7 @@ use RuntimeException;
 final class Pagarme
 {
     private const API = 'https://api.pagar.me/core/v5';
+    private const SANDBOX_API = 'https://sdx-api.pagar.me/core/v5';
 
     public static function createOrder(array $settings, array $order, array $customer, array $items, string $method): array
     {
@@ -101,7 +102,8 @@ final class Pagarme
 
     private static function request(string $method, string $path, string $secret, ?array $payload = null, ?string $idempotencyKey = null): array
     {
-        $curl = curl_init(self::API . $path);
+        $api = str_starts_with($secret, 'sk_test_') ? self::SANDBOX_API : self::API;
+        $curl = curl_init($api . $path);
         $headers = ['Accept: application/json','Content-Type: application/json','Authorization: Basic ' . base64_encode($secret . ':')];
         if ($idempotencyKey) $headers[] = 'Idempotency-Key: ' . $idempotencyKey;
         curl_setopt_array($curl, [CURLOPT_RETURNTRANSFER=>true,CURLOPT_CUSTOMREQUEST=>$method,CURLOPT_HTTPHEADER=>$headers,CURLOPT_TIMEOUT=>35]);
