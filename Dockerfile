@@ -8,6 +8,7 @@ RUN apt-get update \
         libjpeg62-turbo-dev \
         libpng-dev \
         libwebp-dev \
+        unzip \
         zlib1g-dev \
     && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
     && docker-php-ext-install pdo_mysql gd opcache \
