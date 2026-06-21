@@ -113,7 +113,18 @@ final class Pagarme
         $decoded = json_decode((string) $response, true);
         if ($status === 204) return [];
         if ($response === false || $status < 200 || $status >= 300 || !is_array($decoded)) {
-            $message = $decoded['message'] ?? $decoded['errors'][0]['message'] ?? $error ?: 'Falha de comunicação com o pagamento.';
+            error_log('Pagar.me HTTP ' . $status . ': ' . substr((string)$response, 0, 2000));
+            $messages = [];
+            if (is_array($decoded)) {
+                if (!empty($decoded['message']) && is_string($decoded['message'])) $messages[] = $decoded['message'];
+                $walker = static function ($value) use (&$messages, &$walker): void {
+                    if (is_string($value) && trim($value) !== '') $messages[] = trim($value);
+                    elseif (is_array($value)) foreach ($value as $item) $walker($item);
+                };
+                if (isset($decoded['errors'])) $walker($decoded['errors']);
+            }
+            $message = implode(' ', array_values(array_unique($messages)));
+            if ($message === '') $message = $error !== '' ? $error : 'O Pagar.me retornou HTTP ' . $status . ' sem uma mensagem válida.';
             if (stripos((string)$message, 'checkout is disabled') !== false) {
                 $message = 'O checkout hospedado está desativado na conta Pagar.me. Ative Links de Pagamento/Checkout no portal Pagar.me.';
             }
