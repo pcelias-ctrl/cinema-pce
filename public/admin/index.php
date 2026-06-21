@@ -605,7 +605,7 @@ try {
     if (in_array($route, ['showtimes', 'showtime_new', 'showtime_edit', 'sales', 'sale_new'], true)) {
         ensure_ticket_pricing_columns();
     }
-    if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'ticket_receipt', 'ticket_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
+    if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'ticket_receipt', 'ticket_print', 'sale_receipt_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
         ensure_product_tables();
     }
     if ($route === 'public_settings') PublicPortal::ensureSchema(db());
@@ -1542,15 +1542,16 @@ try {
         Auth::requireLogin();
         $cash = open_cash_register();
         $date = trim($_GET['date'] ?? date('Y-m-d'));
+        $nowLocal = (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s');
         $stmt = db()->prepare(
             'SELECT showtimes.*, movies.title movie_title, movies.duration_minutes, movies.cover_data IS NOT NULL has_cover, rooms.name room_name
              FROM showtimes
              INNER JOIN movies ON movies.id = showtimes.movie_id
              INNER JOIN rooms ON rooms.id = showtimes.room_id
-             WHERE DATE(showtimes.starts_at) = ? AND showtimes.status = "programada"
+             WHERE DATE(showtimes.starts_at) = ? AND showtimes.status = "programada" AND showtimes.starts_at > ?
              ORDER BY showtimes.starts_at ASC, movies.title ASC'
         );
-        $stmt->execute([$date]);
+        $stmt->execute([$date, $nowLocal]);
         $showtimes = $stmt->fetchAll();
 
         layout('Venda', function () use ($date, $showtimes, $cash) {
@@ -1600,9 +1601,9 @@ try {
              FROM showtimes
              INNER JOIN movies ON movies.id = showtimes.movie_id
              INNER JOIN rooms ON rooms.id = showtimes.room_id
-             WHERE showtimes.id = ? AND showtimes.status = "programada"'
+             WHERE showtimes.id = ? AND showtimes.status = "programada" AND showtimes.starts_at > ?'
         );
-        $stmt->execute([$showtimeId]);
+        $stmt->execute([$showtimeId, (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s')]);
         $showtime = $stmt->fetch();
         if (!$showtime) {
             throw new RuntimeException('Sessão não encontrada ou indisponível para venda.');
@@ -1856,10 +1857,12 @@ try {
         $productCountStmt->execute([$saleCode]);
         $productCount = (int) $productCountStmt->fetchColumn();
         layout('Ingressos', function () use ($tickets, $first, $cinema, $productCount) {
+            $combinedPrintUrl = 'index.php?route=sale_receipt_print&sale_code=' . urlencode($first['sale_code']);
             ?>
             <div class="section-head no-print">
                 <h1><?= count($tickets) ?> ingresso(s) emitido(s)</h1>
                 <div class="toolbar">
+                    <a class="button primary" href="<?= e($combinedPrintUrl) ?>" target="_blank" rel="noopener">Imprimir tudo</a>
                     <a class="button primary" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir ingressos separados</a>
                     <?php if ($productCount): ?><a class="button primary" href="index.php?route=product_receipt&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir produtos (<?= $productCount ?>)</a><?php endif; ?>
                     <a class="button primary" href="index.php?route=sale_new&showtime_id=<?= (int) $first['showtime_id'] ?>">Nova venda nesta sessão</a>
@@ -1886,8 +1889,113 @@ try {
             </div>
             <script src="/assets/js/vendor/qrcode.min.js"></script>
             <script src="/assets/js/ticket-qr.js"></script>
+            <script>
+                (function () {
+                    const printUrl = <?= json_encode($combinedPrintUrl, JSON_UNESCAPED_SLASHES) ?>;
+                    const popup = window.open(printUrl, 'cinema_sale_print_<?= e(preg_replace('/\W+/', '_', $first['sale_code'])) ?>', 'popup=yes,width=420,height=720');
+                    if (popup) popup.focus();
+                })();
+            </script>
             <?php
         });
+        exit;
+    }
+
+    if ($route === 'sale_receipt_print') {
+        Auth::requireLogin();
+        $saleCode = trim($_GET['sale_code'] ?? '');
+        $tickets = sale_tickets($saleCode);
+        if (!$tickets) {
+            http_response_code(404);
+            exit('Venda nao encontrada.');
+        }
+        $itemsStmt = db()->prepare('SELECT product_sale_items.*, products.name product_name, product_categories.name category_name, product_sales.sale_code, product_sales.payment_method, product_sales.total_amount FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id WHERE product_sales.sale_code=? ORDER BY product_categories.sort_order, products.name, product_sale_items.id');
+        $itemsStmt->execute([$saleCode]);
+        $items = $itemsStmt->fetchAll();
+        $first = $tickets[0];
+        $cinema = cinema_settings();
+        ?>
+        <!doctype html>
+        <html lang="pt-br">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Impressao da venda <?= e($first['sale_code']) ?></title>
+            <style>
+                *{box-sizing:border-box} html,body{margin:0;background:#fff;color:#000} body{font:12px/1.25 "Courier New",Courier,monospace}
+                .actions{display:flex;justify-content:center;gap:8px;padding:14px;background:#f3f3f3}
+                .actions button{padding:9px 14px;border:0;border-radius:3px;background:#c2410c;color:#fff;font-weight:700;cursor:pointer}
+                .receipt{width:40ch;max-width:calc(100% - 8mm);margin:0 auto;padding:4mm 0;text-align:left;overflow-wrap:anywhere}
+                .receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}
+                h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
+                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}
+                [data-ticket-qr]{width:36mm;height:36mm;margin:8px auto 4px}[data-ticket-qr] canvas,[data-ticket-qr] img{width:36mm!important;height:36mm!important;display:block}
+                .code{text-align:center;font-size:8px;word-break:break-all}.thanks{text-align:center;margin-top:8px;font-weight:700}
+                .receipt+.receipt{break-before:page;page-break-before:always}
+                @media print{.actions{display:none}.receipt{width:40ch;max-width:none;padding:0}.receipt+.receipt{break-before:page;page-break-before:always}@page{size:80mm auto;margin:3mm}}
+            </style>
+        </head>
+        <body>
+            <div class="actions"><button id="print-all" type="button">Imprimir ingressos e produtos</button></div>
+            <?php foreach ($tickets as $ticket): ?>
+                <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
+                <main class="receipt">
+                    <?php if ($cinema['has_logo']): ?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif; ?>
+                    <h1><?= e($cinema['cinema_name']) ?></h1>
+                    <div class="company">
+                        <?php if ($cinema['cnpj']): ?>CNPJ <?= e($cinema['cnpj']) ?><br><?php endif; ?>
+                        <?php if ($cinema['address']): ?><?= nl2br(e($cinema['address'])) ?><br><?php endif; ?>
+                        <?= e($cinema['phone'] ?: $cinema['whatsapp']) ?>
+                    </div>
+                    <div class="line"></div>
+                    <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
+                    <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                    <p><strong>Classificacao:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
+                    <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
+                    <p><strong>Sessao:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
+                    <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
+                    <p><strong>Tipo:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?></p>
+                    <p><strong>Valor:</strong> R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
+                    <div class="line"></div>
+                    <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
+                    <div class="code"><?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></div>
+                    <p class="thanks">Apresente este ingresso na entrada.</p>
+                </main>
+            <?php endforeach; ?>
+            <?php foreach ($items as $item): ?>
+                <?php $pickupUrl = app_url('product_pickup_lookup', ['token' => $item['qr_token']]); ?>
+                <main class="receipt">
+                    <?php if ($cinema['has_logo']): ?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif; ?>
+                    <h1>RETIRADA DE PRODUTO</h1>
+                    <div class="line"></div>
+                    <p><strong>Venda:</strong> <?= e($item['sale_code']) ?></p>
+                    <p><strong>Produto:</strong> <?= e($item['product_name']) ?></p>
+                    <p><strong>Categoria:</strong> <?= e($item['category_name']) ?></p>
+                    <p><strong>Valor:</strong> R$ <?= e(number_format((float) $item['unit_price'], 2, ',', '.')) ?></p>
+                    <div class="line"></div>
+                    <div data-ticket-qr data-url="<?= e($pickupUrl) ?>"></div>
+                    <div class="code"><?= e($item['qr_token']) ?></div>
+                    <p class="thanks">Apresente no balcao de retirada.</p>
+                </main>
+            <?php endforeach; ?>
+            <script src="/assets/js/vendor/qrcode.min.js"></script>
+            <script src="/assets/js/ticket-qr.js"></script>
+            <script>
+                const printAll = async () => {
+                    const button = document.getElementById('print-all');
+                    button.disabled = true;
+                    button.textContent = 'Preparando QR Codes...';
+                    await (window.ticketQrReady || Promise.resolve());
+                    button.disabled = false;
+                    button.textContent = 'Imprimir ingressos e produtos';
+                    window.print();
+                };
+                document.getElementById('print-all').addEventListener('click', printAll);
+                window.addEventListener('load', () => window.setTimeout(printAll, 250));
+            </script>
+        </body>
+        </html>
+        <?php
         exit;
     }
 
