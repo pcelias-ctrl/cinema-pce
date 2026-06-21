@@ -119,6 +119,7 @@ p { line-height:1.5; }
 .payment-result p { margin:0; color:var(--muted); }
 .payment-actions { display:flex; justify-content:center; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .payment-actions .portal-button:not(.primary) { border:1px solid var(--line); }
+.payment-cancel-form { margin-top:10px; }
 .pix-box { width:min(360px,100%); display:grid; justify-items:center; gap:8px; }
 .pix-box [data-pix-qr] { padding:8px; border:1px solid var(--line); background:#fff; }
 .pix-box textarea { width:100%; height:76px; padding:8px; border:1px solid var(--line); border-radius:4px; font-size:10px; resize:none; }

@@ -10,17 +10,27 @@ final class Pagarme
 {
     private const API = 'https://api.pagar.me/core/v5';
 
-    public static function createOrder(array $settings, array $order, array $customer, array $items, string $method, ?string $cardToken = null): array
+    public static function createOrder(array $settings, array $order, array $customer, array $items, string $method): array
     {
         $secret = SettingCrypto::decrypt($settings['pagarme_secret_encrypted'] ?? '');
         if ($secret === '') throw new RuntimeException('Pagar.me não configurado.');
         $phone = PublicPortal::normalizeDigits($customer['whatsapp'] ?: $customer['phone']);
         $area = substr($phone, 0, 2);
         $number = substr($phone, 2);
+        $totalCents = array_reduce($items, static fn(int $total, array $item): int => $total + ((int) $item['amount'] * (int) $item['quantity']), 0);
         $payment = $method === 'cartao'
-            ? ['payment_method'=>'credit_card','credit_card'=>['installments'=>1,'statement_descriptor'=>'CINESYS','card_token'=>$cardToken]]
+            ? ['payment_method'=>'checkout','checkout'=>[
+                'customer_editable'=>true,
+                'accepted_payment_methods'=>['credit_card'],
+                'success_url'=>PublicPortal::publicUrl(['action'=>'payment','order'=>$order['order_code'],'provider_return'=>'1']),
+                'expires_in'=>max(5, (int) ceil(((int)($order['expires_epoch'] ?? time() + 600) - time()) / 60)),
+                'credit_card'=>[
+                    'installments'=>[['number'=>1,'total'=>$totalCents]],
+                    'statement_descriptor'=>'CINESYS',
+                    'capture'=>true,
+                ],
+            ]]
             : ['payment_method'=>'pix','pix'=>['expires_in'=>max(60, (int)($order['expires_epoch']??strtotime($order['expires_at'])) - time())]];
-        if ($method === 'cartao' && !$cardToken) throw new RuntimeException('Os dados do cartão não foram tokenizados.');
         $payload = [
             'code' => $order['order_code'],
             'closed' => true,
@@ -46,6 +56,11 @@ final class Pagarme
             throw new RuntimeException($message !== '' ? 'Pagamento recusado pelo Pagar.me: ' . $message : 'O Pagar.me recusou a criação do pagamento.');
         }
         return $response;
+    }
+
+    public static function checkoutUrl(array $order): string
+    {
+        return (string) ($order['checkouts'][0]['payment_url'] ?? '');
     }
 
     public static function getOrder(array $settings, string $providerOrderId): array

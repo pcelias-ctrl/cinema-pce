@@ -105,6 +105,10 @@ final class PublicPortal
             WHERE public_seat_holds.expires_at <= NOW() AND public_orders.status IN ('rascunho','aguardando_pagamento','expirado','cancelado')");
         $db->exec("UPDATE public_orders SET status='expirado'
             WHERE status IN ('rascunho','aguardando_pagamento') AND expires_at IS NOT NULL AND expires_at <= NOW()");
+        $db->exec("UPDATE public_order_products
+            INNER JOIN public_orders ON public_orders.id = public_order_products.order_id
+            SET public_order_products.status='cancelado'
+            WHERE public_orders.status IN ('expirado','cancelado') AND public_order_products.status='aguardando_pagamento'");
     }
 
     public static function cinema(PDO $db): array
@@ -278,5 +282,27 @@ final class PublicPortal
                 error_log('E-mail da compra: '.$mailException->getMessage());
             }
         }catch(\Throwable $exception){if($db->inTransaction())$db->rollBack();throw $exception;}
+    }
+
+    public static function cancelPendingOrder(PDO $db, int $orderId): bool
+    {
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('SELECT status FROM public_orders WHERE id=? FOR UPDATE');
+            $stmt->execute([$orderId]);
+            $status = (string) $stmt->fetchColumn();
+            if (!in_array($status, ['rascunho', 'aguardando_pagamento'], true)) {
+                $db->commit();
+                return false;
+            }
+            $db->prepare("UPDATE public_orders SET status='cancelado',expires_at=NOW() WHERE id=?")->execute([$orderId]);
+            $db->prepare("UPDATE public_order_products SET status='cancelado' WHERE order_id=? AND status='aguardando_pagamento'")->execute([$orderId]);
+            $db->prepare('DELETE FROM public_seat_holds WHERE order_id=?')->execute([$orderId]);
+            $db->commit();
+            return true;
+        } catch (\Throwable $exception) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $exception;
+        }
     }
 }
