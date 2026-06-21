@@ -17,20 +17,7 @@ final class Pagarme
         $phone = PublicPortal::normalizeDigits($customer['whatsapp'] ?: $customer['phone']);
         $area = substr($phone, 0, 2);
         $number = substr($phone, 2);
-        $totalCents = array_reduce($items, static fn(int $total, array $item): int => $total + ((int) $item['amount'] * (int) $item['quantity']), 0);
-        $payment = $method === 'cartao'
-            ? ['payment_method'=>'checkout','checkout'=>[
-                'customer_editable'=>true,
-                'accepted_payment_methods'=>['credit_card'],
-                'success_url'=>PublicPortal::publicUrl(['action'=>'payment','order'=>$order['order_code'],'provider_return'=>'1']),
-                'expires_in'=>max(5, (int) ceil(((int)($order['expires_epoch'] ?? time() + 600) - time()) / 60)),
-                'credit_card'=>[
-                    'installments'=>[['number'=>1,'total'=>$totalCents]],
-                    'statement_descriptor'=>'CINESYS',
-                    'capture'=>true,
-                ],
-            ]]
-            : ['payment_method'=>'pix','pix'=>['expires_in'=>max(60, (int)($order['expires_epoch']??strtotime($order['expires_at'])) - time())]];
+        $payment = ['payment_method'=>'pix','pix'=>['expires_in'=>max(60, (int)($order['expires_epoch']??strtotime($order['expires_at'])) - time())]];
         $payload = [
             'code' => $order['order_code'],
             'closed' => true,
@@ -58,9 +45,51 @@ final class Pagarme
         return $response;
     }
 
-    public static function checkoutUrl(array $order): string
+    public static function createPaymentLink(array $settings, array $order, array $customer, array $items): array
     {
-        return (string) ($order['checkouts'][0]['payment_url'] ?? '');
+        $secret = SettingCrypto::decrypt($settings['pagarme_secret_encrypted'] ?? '');
+        if ($secret === '') throw new RuntimeException('Pagar.me não configurado.');
+        $totalCents = array_reduce($items, static fn(int $total, array $item): int => $total + ((int) $item['amount'] * (int) $item['quantity']), 0);
+        $expiresIn = max(300, (int) ($order['expires_epoch'] ?? time() + 600) - time());
+        $payload = [
+            'is_building' => false,
+            'type' => 'order',
+            'name' => 'Cinema - pedido ' . $order['order_code'],
+            'order_code' => $order['order_code'],
+            'expires_in' => $expiresIn,
+            'max_paid_sessions' => 1,
+            'metadata' => ['local_order_id'=>(string)$order['id'],'order_code'=>$order['order_code']],
+            'payment_settings' => [
+                'accepted_payment_methods' => ['credit_card'],
+                'credit_card_settings' => [
+                    'operation_type' => 'auth_and_capture',
+                    'installments_setup' => ['amount'=>$totalCents,'interest_rate'=>0,'max_installments'=>1,'interest_type'=>'simple'],
+                ],
+            ],
+            'cart_settings' => ['items'=>array_map(static fn(array $item): array => [
+                'name'=>(string)$item['description'],'amount'=>(int)$item['amount'],'default_quantity'=>(int)$item['quantity'],
+            ],$items)],
+            'customer_settings' => ['customer'=>[
+                'name'=>$customer['name'],'email'=>$customer['email'],'document_type'=>'CPF','document'=>$customer['cpf'],
+            ]],
+        ];
+        $response = self::request('POST', '/paymentlinks', $secret, $payload, $order['order_code']);
+        if (empty($response['id']) || empty($response['url'])) throw new RuntimeException('O Pagar.me não retornou o link de pagamento.');
+        return $response;
+    }
+
+    public static function getPaymentLink(array $settings, string $paymentLinkId): array
+    {
+        $secret = SettingCrypto::decrypt($settings['pagarme_secret_encrypted'] ?? '');
+        if ($secret === '') throw new RuntimeException('Pagar.me não configurado.');
+        return self::request('GET', '/paymentlinks/' . rawurlencode($paymentLinkId), $secret);
+    }
+
+    public static function cancelPaymentLink(array $settings, string $paymentLinkId): void
+    {
+        $secret = SettingCrypto::decrypt($settings['pagarme_secret_encrypted'] ?? '');
+        if ($secret === '') throw new RuntimeException('Pagar.me não configurado.');
+        self::request('PATCH', '/paymentlinks/' . rawurlencode($paymentLinkId) . '/cancel', $secret, []);
     }
 
     public static function getOrder(array $settings, string $providerOrderId): array
@@ -82,8 +111,12 @@ final class Pagarme
         $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
         curl_close($curl);
         $decoded = json_decode((string) $response, true);
+        if ($status === 204) return [];
         if ($response === false || $status < 200 || $status >= 300 || !is_array($decoded)) {
             $message = $decoded['message'] ?? $decoded['errors'][0]['message'] ?? $error ?: 'Falha de comunicação com o pagamento.';
+            if (stripos((string)$message, 'checkout is disabled') !== false) {
+                $message = 'O checkout hospedado está desativado na conta Pagar.me. Ative Links de Pagamento/Checkout no portal Pagar.me.';
+            }
             throw new RuntimeException((string) $message);
         }
         return $decoded;

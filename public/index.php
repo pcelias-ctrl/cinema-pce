@@ -42,6 +42,17 @@ function confirm_infinitepay_order(PDO $db, array $settings, array $order, array
     return true;
 }
 
+function confirm_pagarme_order(PDO $db, array $settings, array $order, string $providerOrderId): bool
+{
+    $remote=Pagarme::getOrder($settings,$providerOrderId);
+    $expectedAmount=(int)round((float)$order['total_amount']*100);
+    if(($remote['status']??'')!=='paid'||(int)($remote['amount']??0)!==$expectedAmount)return false;
+    $charge=$remote['charges'][0]??[];
+    $db->prepare("UPDATE public_orders SET payment_method='cartao',pagarme_order_id=?,pagarme_charge_id=?,provider_payload=? WHERE id=?")->execute([$providerOrderId,$charge['id']??null,json_encode($remote,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),(int)$order['id']]);
+    PublicPortal::finalizePaidOrder($db,(int)$order['id'],$remote);
+    return true;
+}
+
 if ($action === 'logo') {
     $logo = $db->query('SELECT logo_mime,logo_data FROM cinema_settings WHERE id=1 AND logo_data IS NOT NULL')->fetch();
     if (!$logo) { http_response_code(404); exit; }
@@ -115,10 +126,15 @@ if ($action === 'pagarme_webhook') {
     if($providedUser===''&&preg_match('/^Basic\s+(.+)$/i',(string)($_SERVER['HTTP_AUTHORIZATION']??''),$match)){$credentials=base64_decode($match[1],true);if($credentials!==false&&str_contains($credentials,':'))[$providedUser,$providedPassword]=explode(':',$credentials,2);}
     $valid=$expectedUser!==''&&$expectedPassword!==''&&hash_equals($expectedUser,$providedUser)&&hash_equals($expectedPassword,$providedPassword);
     if(!$valid){header('WWW-Authenticate: Basic realm="CineSys Pagar.me"');http_response_code(401);exit;}
-    $payload=json_decode((string)file_get_contents('php://input'),true)?:[];$data=$payload['data']??[];
-    $providerId=(string)($data['id']??'');$providerOrderId=(string)($data['order']['id']??'');
-    $stmt=$db->prepare('SELECT id,pagarme_order_id FROM public_orders WHERE pagarme_order_id=? OR pagarme_charge_id=? LIMIT 1');$stmt->execute([$providerOrderId?:$providerId,$providerId]);$local=$stmt->fetch();
-    if($local&&$local['pagarme_order_id']){try{$remote=Pagarme::getOrder($portalSettings,$local['pagarme_order_id']);if(($remote['status']??'')==='paid')PublicPortal::finalizePaidOrder($db,(int)$local['id'],$remote);}catch(Throwable $exception){error_log('Webhook Pagar.me: '.$exception->getMessage());http_response_code(500);exit;}}
+    $payload=json_decode((string)file_get_contents('php://input'),true)?:[];$data=$payload['data']??[];$eventType=(string)($payload['type']??'');
+    $providerId=(string)($data['id']??'');$providerOrderId=(string)($data['order']['id']??(str_starts_with($eventType,'order.')?$providerId:''));
+    $metadata=$data['metadata']??($data['order']['metadata']??[]);$localId=(int)($metadata['local_order_id']??0);$orderCode=(string)($data['code']??$data['order_code']??$metadata['order_code']??'');
+    $paymentLinkId=(string)($data['payment_link']['id']??$data['payment_link_id']??$metadata['payment_link_id']??'');
+    if($localId>0){$stmt=$db->prepare('SELECT * FROM public_orders WHERE id=? LIMIT 1');$stmt->execute([$localId]);}
+    elseif($orderCode!==''){$stmt=$db->prepare('SELECT * FROM public_orders WHERE order_code=? LIMIT 1');$stmt->execute([$orderCode]);}
+    else{$stmt=$db->prepare('SELECT * FROM public_orders WHERE pagarme_order_id=? OR pagarme_charge_id=? OR provider_reference=? LIMIT 1');$stmt->execute([$providerOrderId?:$providerId,$providerId,$paymentLinkId]);}
+    $local=$stmt->fetch();
+    if($local&&$providerOrderId!==''){try{confirm_pagarme_order($db,$portalSettings,$local,$providerOrderId);}catch(Throwable $exception){error_log('Webhook Pagar.me: '.$exception->getMessage());http_response_code(500);exit;}}
     http_response_code(204);exit;
 }
 
@@ -161,6 +177,11 @@ if ($action === 'cancel_order' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     header('Location: /?action=payment&order=' . urlencode($orderCode));
                     exit;
                 }
+            }
+            if ($pendingOrder['payment_gateway'] === 'pagarme' && $pendingOrder['payment_method'] === 'cartao' && $pendingOrder['provider_reference']) {
+                $paymentLink=Pagarme::getPaymentLink($portalSettings,(string)$pendingOrder['provider_reference']);
+                if((int)($paymentLink['total_paid_sessions']??0)>0)throw new RuntimeException('Pagamento em confirmação.');
+                Pagarme::cancelPaymentLink($portalSettings,(string)$pendingOrder['provider_reference']);
             }
             PublicPortal::cancelPendingOrder($db, (int) $pendingOrder['id']);
         } catch (Throwable $exception) {
@@ -264,11 +285,10 @@ if ($action === 'pay' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $order['total_amount']=$total;$order['products_total']=$productTotal;$order['payment_method']=$method;$order['expires_epoch']=time()+($paymentMinutes*60);$db->commit();
         $items=array_merge($ticketItems,$productItems);
         if($gateway==='infinitepay'){$provider=InfinitePay::createCheckout($portalSettings,$order,$customer,$items);$checkoutUrl=(string)($provider['url']??$provider['checkout_url']??'');$db->prepare('UPDATE public_orders SET provider_reference=?,provider_checkout_url=?,provider_payload=? WHERE id=?')->execute([(string)($provider['slug']??''),$checkoutUrl,json_encode($provider,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),(int)$order['id']]);header('Location: '.$checkoutUrl);exit;}
-        $provider=Pagarme::createOrder($portalSettings,$order,$customer,$items,$method);$charge=$provider['charges'][0]??[];$transaction=$charge['last_transaction']??[];$checkoutUrl=$method==='cartao'?Pagarme::checkoutUrl($provider):'';
-        if($method==='cartao'&&$checkoutUrl==='')throw new RuntimeException('O Pagar.me não retornou o endereço do checkout.');
+        if($method==='cartao'){$provider=Pagarme::createPaymentLink($portalSettings,$order,$customer,$items);$checkoutUrl=(string)$provider['url'];$db->prepare('UPDATE public_orders SET provider_reference=?,provider_checkout_url=?,provider_payload=? WHERE id=?')->execute([(string)$provider['id'],$checkoutUrl,json_encode($provider,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),(int)$order['id']]);header('Location: '.$checkoutUrl);exit;}
+        $provider=Pagarme::createOrder($portalSettings,$order,$customer,$items,'pix');$charge=$provider['charges'][0]??[];$transaction=$charge['last_transaction']??[];$checkoutUrl='';
         $db->prepare('UPDATE public_orders SET pagarme_order_id=?,pagarme_charge_id=?,pix_qr_code=?,pix_qr_code_url=?,provider_reference=?,provider_checkout_url=?,provider_payload=? WHERE id=?')->execute([$provider['id']??null,$charge['id']??null,$transaction['qr_code']??null,$transaction['qr_code_url']??null,$provider['id']??null,$checkoutUrl?:null,json_encode($provider,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),(int)$order['id']]);
         if(($provider['status']??'')==='paid')PublicPortal::finalizePaidOrder($db,(int)$order['id'],$provider);
-        if($checkoutUrl!==''){header('Location: '.$checkoutUrl);exit;}
         header('Location: /?action=payment&order='.$orderCode);exit;
     }catch(Throwable $exception){if($db->inTransaction())$db->rollBack();$_SESSION['portal_error']=$exception->getMessage();header('Location: /?action=checkout&order='.urlencode($orderCode));exit;}
 }
@@ -405,7 +425,7 @@ function public_layout(string $title, array $cinema, ?array $customer, string $a
     <!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#17120f"><title><?= e($title) ?> - <?= e($cinema['cinema_name']) ?></title><link rel="stylesheet" href="/assets/css/portal.css"></head>
     <body><header class="portal-header"><a class="portal-brand" href="/"><?php if($cinema['has_logo']):?><img src="/?action=logo" alt=""><?php endif;?><strong><?=e($cinema['cinema_name'])?></strong></a><nav><a href="/">Sessões</a><?php if($customer):?><a href="/?action=account">Meus ingressos</a><a href="/?action=logout">Sair</a><?php else:?><a href="/?action=access">Entrar</a><a class="primary-link" href="/?action=register">Criar conta</a><?php endif;?></nav></header>
     <main class="portal-main"><?php if($message):?><p class="portal-notice success"><?=e($message)?></p><?php endif;?><?php if($error):?><p class="portal-notice error"><?=e($error)?></p><?php endif;?><?php $content();?></main>
-    <footer class="portal-footer"><div><strong><?=e($cinema['cinema_name'])?></strong><span><?=e($cinema['address'])?></span></div><nav><a href="/?action=privacy">Privacidade</a><a href="/?action=cookies">Cookies</a><a href="/admin/">Acesso administrativo</a></nav></footer>
+    <footer class="portal-footer"><div><strong><?=e($cinema['cinema_name'])?></strong><span><?=e($cinema['address'])?></span></div><nav><a href="/?action=privacy">Privacidade</a><a href="/?action=cookies">Cookies</a></nav></footer>
     <section class="cookie-banner" id="cookie-banner" hidden><div><strong>Privacidade e cookies</strong><p>Usamos cookies essenciais para manter sua sessão, proteger a compra e guardar suas preferências.</p></div><div><a href="/?action=cookies">Saiba mais</a><button type="button" data-cookie-choice="essential">Somente essenciais</button><button type="button" class="primary" data-cookie-choice="all">Aceitar todos</button></div></section><script src="/assets/js/vendor/qrcode.min.js"></script><script src="/assets/js/portal.js"></script></body></html>
     <?php
 }
