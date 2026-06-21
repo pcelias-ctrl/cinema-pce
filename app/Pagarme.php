@@ -19,7 +19,7 @@ final class Pagarme
         $number = substr($phone, 2);
         $payment = $method === 'cartao'
             ? ['payment_method'=>'credit_card','credit_card'=>['installments'=>1,'statement_descriptor'=>'CINESYS','card_token'=>$cardToken]]
-            : ['payment_method'=>'pix','pix'=>['expires_in'=>max(60, strtotime($order['expires_at']) - time())]];
+            : ['payment_method'=>'pix','pix'=>['expires_in'=>max(60, (int)($order['expires_epoch']??strtotime($order['expires_at'])) - time())]];
         if ($method === 'cartao' && !$cardToken) throw new RuntimeException('Os dados do cartão não foram tokenizados.');
         $payload = [
             'code' => $order['order_code'],

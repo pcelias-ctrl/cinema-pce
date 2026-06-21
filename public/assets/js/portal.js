@@ -59,7 +59,7 @@
     const timer = document.querySelector('.hold-timer');
     if (timer) {
         const label = timer.querySelector('strong');
-        const expiresAt = new Date(String(timer.dataset.expires).replace(' ', 'T') + '-03:00').getTime();
+        const expiresAt = Number(timer.dataset.expiresEpoch || 0) * 1000;
         const tick = () => {
             const remaining = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
             label.textContent = `${String(Math.floor(remaining / 60)).padStart(2, '0')}:${String(remaining % 60).padStart(2, '0')}`;
