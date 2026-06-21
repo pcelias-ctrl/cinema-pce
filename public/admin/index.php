@@ -1862,9 +1862,9 @@ try {
             <div class="section-head no-print">
                 <h1><?= count($tickets) ?> ingresso(s) emitido(s)</h1>
                 <div class="toolbar">
-                    <a class="button primary" href="<?= e($combinedPrintUrl) ?>" target="_blank" rel="noopener">Imprimir tudo</a>
-                    <a class="button primary" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir ingressos separados</a>
-                    <?php if ($productCount): ?><a class="button primary" href="index.php?route=product_receipt&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir produtos (<?= $productCount ?>)</a><?php endif; ?>
+                    <a class="button" href="<?= e($combinedPrintUrl) ?>" target="_blank" rel="noopener">Imprimir tudo</a>
+                    <a class="button" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir ingressos separados</a>
+                    <?php if ($productCount): ?><a class="button" href="index.php?route=product_receipt&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir produtos (<?= $productCount ?>)</a><?php endif; ?>
                     <a class="button primary" href="index.php?route=sale_new&showtime_id=<?= (int) $first['showtime_id'] ?>">Nova venda nesta sessão</a>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
