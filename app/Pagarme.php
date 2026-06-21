@@ -42,7 +42,10 @@ final class Pagarme
             }
             $message = trim(implode(' ', $messages));
             if (str_contains($message, 'Sem ambiente configurado')) {
-                throw new RuntimeException('O Pix ainda não está habilitado na conta Pagar.me. Ative o Pix no painel Pagar.me ou escolha InfinitePay.');
+                if (str_starts_with((string)($settings['pagarme_public_key']??''), 'pk_test_')) {
+                    throw new RuntimeException('O Pix não está habilitado no ambiente de testes do Pagar.me. O CineSys está usando chaves pk_test/sk_test; para cobranças reais, configure as chaves pk_live/sk_live da conta em que o Pix foi ativado.');
+                }
+                throw new RuntimeException('O Pagar.me informou que o Pix ainda não está habilitado no ambiente de produção desta conta. Confirme a ativação para as mesmas chaves configuradas no CineSys.');
             }
             throw new RuntimeException($message !== '' ? 'Pagamento recusado pelo Pagar.me: ' . $message : 'O Pagar.me recusou a criação do pagamento.');
         }
