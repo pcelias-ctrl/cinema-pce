@@ -105,7 +105,7 @@ final class Pagarme
 
     private static function request(string $method, string $path, string $secret, ?array $payload = null, ?string $idempotencyKey = null): array
     {
-        $api = str_starts_with($secret, 'sk_test_') ? self::SANDBOX_API : self::API;
+        $api = str_starts_with($secret, 'sk_test_') && str_starts_with($path, '/paymentlinks') ? self::SANDBOX_API : self::API;
         $curl = curl_init($api . $path);
         $headers = ['Accept: application/json','Content-Type: application/json','Authorization: Basic ' . base64_encode($secret . ':')];
         if ($idempotencyKey) $headers[] = 'Idempotency-Key: ' . $idempotencyKey;
