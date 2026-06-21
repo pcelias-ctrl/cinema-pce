@@ -52,6 +52,7 @@ CREATE TABLE movies (
     cover_data LONGBLOB NULL,
     duration_minutes SMALLINT UNSIGNED NOT NULL,
     genre VARCHAR(120) NOT NULL,
+    age_rating ENUM('L','10','12','14','16','18') NOT NULL DEFAULT 'L',
     technical_sheet JSON NULL,
     active TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

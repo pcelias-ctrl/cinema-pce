@@ -232,7 +232,6 @@ function technical_sheet_from_post(): ?string
         'elenco' => trim($_POST['technical_cast'] ?? ''),
         'pais' => trim($_POST['technical_country'] ?? ''),
         'ano' => trim($_POST['technical_year'] ?? ''),
-        'classificacao' => trim($_POST['technical_rating'] ?? ''),
         'distribuidora' => trim($_POST['technical_distributor'] ?? ''),
     ];
 
@@ -249,7 +248,6 @@ function technical_sheet_fields(?string $value): array
         'elenco' => '',
         'pais' => '',
         'ano' => '',
-        'classificacao' => '',
         'distribuidora' => '',
     ];
 
@@ -280,6 +278,25 @@ function money_to_decimal(string $value): float
         : $value;
 
     return max(0, (float) $value);
+}
+
+function normalize_age_rating(string $value): string
+{
+    return in_array($value, ['L', '10', '12', '14', '16', '18'], true) ? $value : 'L';
+}
+
+function age_rating_label(string $value): string
+{
+    $value = normalize_age_rating($value);
+    return $value === 'L' ? 'Livre' : $value . ' anos';
+}
+
+function ensure_movie_age_rating(): void
+{
+    $column = db()->query("SHOW COLUMNS FROM movies LIKE 'age_rating'")->fetch();
+    if (!$column) {
+        db()->exec("ALTER TABLE movies ADD COLUMN age_rating ENUM('L','10','12','14','16','18') NOT NULL DEFAULT 'L' AFTER genre");
+    }
 }
 
 function datetime_local_value(string $value): string
@@ -401,7 +418,7 @@ function sale_tickets(string $saleCode): array
 {
     ensure_ticket_pricing_columns();
     $stmt = db()->prepare(
-        'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
+        'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.age_rating, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
          FROM tickets
          INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
          INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
@@ -583,6 +600,7 @@ try {
     }
 
     Auth::requireLogin();
+    ensure_movie_age_rating();
 
     if (in_array($route, ['showtimes', 'showtime_new', 'showtime_edit', 'sales', 'sale_new'], true)) {
         ensure_ticket_pricing_columns();
@@ -979,7 +997,7 @@ try {
 
     if ($route === 'movies') {
         Auth::requireAdmin();
-        $movies = db()->query('SELECT id, title, genre, duration_minutes, cover_mime, cover_data IS NOT NULL has_cover FROM movies ORDER BY created_at DESC')->fetchAll();
+        $movies = db()->query('SELECT id, title, genre, duration_minutes, age_rating, cover_mime, cover_data IS NOT NULL has_cover FROM movies ORDER BY created_at DESC')->fetchAll();
         layout('Filmes', function () use ($movies) {
             ?>
             <div class="section-head">
@@ -992,7 +1010,7 @@ try {
                         <?php if ($movie['has_cover']): ?><img src="index.php?route=movie_cover&id=<?= (int) $movie['id'] ?>" alt=""><?php endif; ?>
                         <div>
                             <h2><?= e($movie['title']) ?></h2>
-                            <p><?= e($movie['genre']) ?> | <?= e($movie['duration_minutes']) ?> min</p>
+                            <p><?= e($movie['genre']) ?> | <?= e($movie['duration_minutes']) ?> min | Classificação <?= e(age_rating_label($movie['age_rating'])) ?></p>
                             <a href="index.php?route=movie_edit&id=<?= (int) $movie['id'] ?>">Editar</a>
                         </div>
                     </article>
@@ -1005,7 +1023,7 @@ try {
 
     if ($route === 'movie_new' || $route === 'movie_edit') {
         Auth::requireAdmin();
-        $movie = ['title' => '', 'original_title' => '', 'synopsis' => '', 'trailer_url' => '', 'duration_minutes' => '', 'genre' => '', 'technical_sheet' => ''];
+        $movie = ['title' => '', 'original_title' => '', 'synopsis' => '', 'trailer_url' => '', 'duration_minutes' => '', 'genre' => '', 'age_rating' => 'L', 'technical_sheet' => ''];
         if ($route === 'movie_edit') {
             $stmt = db()->prepare('SELECT * FROM movies WHERE id = ?');
             $stmt->execute([(int) $_GET['id']]);
@@ -1016,12 +1034,13 @@ try {
             verify_csrf();
             $cover = save_movie_cover($_FILES['cover'] ?? []);
             $technicalSheet = technical_sheet_from_post();
+            $ageRating = normalize_age_rating((string) ($_POST['age_rating'] ?? 'L'));
             if ($route === 'movie_new') {
-                $stmt = db()->prepare('INSERT INTO movies (title, original_title, synopsis, trailer_url, cover_mime, cover_data, duration_minutes, genre, technical_sheet) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-                $stmt->execute([$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], $cover['mime'] ?? null, $cover['data'] ?? null, (int) $_POST['duration_minutes'], $_POST['genre'], $technicalSheet]);
+                $stmt = db()->prepare('INSERT INTO movies (title, original_title, synopsis, trailer_url, cover_mime, cover_data, duration_minutes, genre, age_rating, technical_sheet) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt->execute([$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], $cover['mime'] ?? null, $cover['data'] ?? null, (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet]);
             } else {
-                $sql = 'UPDATE movies SET title=?, original_title=?, synopsis=?, trailer_url=?, duration_minutes=?, genre=?, technical_sheet=?';
-                $params = [$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], (int) $_POST['duration_minutes'], $_POST['genre'], $technicalSheet];
+                $sql = 'UPDATE movies SET title=?, original_title=?, synopsis=?, trailer_url=?, duration_minutes=?, genre=?, age_rating=?, technical_sheet=?';
+                $params = [$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet];
                 if ($cover) {
                     $sql .= ', cover_mime=?, cover_data=?';
                     $params[] = $cover['mime'];
@@ -1045,6 +1064,13 @@ try {
                     <label>Nome original<input name="original_title" value="<?= input_value('original_title', $movie) ?>"></label>
                     <label>Duração em minutos<input name="duration_minutes" type="number" min="1" value="<?= input_value('duration_minutes', $movie) ?>" required></label>
                     <label>Gênero<input name="genre" value="<?= input_value('genre', $movie) ?>" required></label>
+                    <label>Classificação indicativa
+                        <select name="age_rating" required>
+                            <?php foreach (['L' => 'Livre', '10' => '10 anos', '12' => '12 anos', '14' => '14 anos', '16' => '16 anos', '18' => '18 anos'] as $ratingValue => $ratingLabel): ?>
+                                <option value="<?= e($ratingValue) ?>" <?= normalize_age_rating((string) ($movie['age_rating'] ?? 'L')) === $ratingValue ? 'selected' : '' ?>><?= e($ratingLabel) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
                     <label>Trailer<input name="trailer_url" type="url" value="<?= input_value('trailer_url', $movie) ?>"></label>
                 </div>
                 <label>Sinopse<textarea name="synopsis" rows="5" required><?= e($movie['synopsis']) ?></textarea></label>
@@ -1056,7 +1082,6 @@ try {
                         <label>Elenco principal<input name="technical_cast" value="<?= e($technicalSheet['elenco']) ?>"></label>
                         <label>País<input name="technical_country" value="<?= e($technicalSheet['pais']) ?>"></label>
                         <label>Ano<input name="technical_year" type="number" min="1888" max="2100" value="<?= e($technicalSheet['ano']) ?>"></label>
-                        <label>Classificação indicativa<input name="technical_rating" value="<?= e($technicalSheet['classificacao']) ?>"></label>
                         <label>Distribuidora<input name="technical_distributor" value="<?= e($technicalSheet['distribuidora']) ?>"></label>
                     </div>
                 </fieldset>
@@ -1847,6 +1872,7 @@ try {
                     <section class="ticket-print">
                         <h1><?= e($cinema['cinema_name']) ?></h1>
                         <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                        <p><strong>Classificação:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
                         <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
                         <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
                         <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
@@ -1911,6 +1937,7 @@ try {
                     <div class="line"></div>
                     <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
                     <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                    <p><strong>Classificação:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
                     <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
                     <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
                     <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
@@ -2043,7 +2070,7 @@ try {
         $tickets = [];
         if ($rawToken !== '') {
             $stmt = db()->prepare(
-                'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
+                'SELECT tickets.*, room_seats.seat_code, movies.id movie_id, movies.title movie_title, movies.age_rating, movies.cover_data IS NOT NULL has_cover, rooms.name room_name, showtimes.starts_at, showtimes.audio_type
                  FROM tickets
                  INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
                  INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
@@ -2125,6 +2152,7 @@ try {
                     <?php endif; ?>
                     <div>
                         <h2><?= e($first['movie_title']) ?></h2>
+                        <p><strong>Classificação:</strong> <?= e(age_rating_label($first['age_rating'])) ?></p>
                         <p><strong>Sala:</strong> <?= e($first['room_name']) ?></p>
                         <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($first['starts_at']))) ?> | <?= e(ucfirst($first['audio_type'])) ?></p>
                         <p class="entry-window"><strong>Entrada:</strong> liberada a partir de <?= e($checkinOpensAt->format('d/m/Y H:i')) ?></p>
