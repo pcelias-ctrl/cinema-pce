@@ -11,14 +11,17 @@ final class Pagarme
     private const API = 'https://api.pagar.me/core/v5';
     private const SANDBOX_API = 'https://sdx-api.pagar.me/core/v5';
 
-    public static function createOrder(array $settings, array $order, array $customer, array $items, string $method): array
+    public static function createOrder(array $settings, array $order, array $customer, array $items, string $method, ?string $cardToken = null): array
     {
         $secret = SettingCrypto::decrypt($settings['pagarme_secret_encrypted'] ?? '');
         if ($secret === '') throw new RuntimeException('Pagar.me não configurado.');
         $phone = PublicPortal::normalizeDigits($customer['whatsapp'] ?: $customer['phone']);
         $area = substr($phone, 0, 2);
         $number = substr($phone, 2);
-        $payment = ['payment_method'=>'pix','pix'=>['expires_in'=>max(60, (int)($order['expires_epoch']??strtotime($order['expires_at'])) - time())]];
+        $payment = $method === 'cartao'
+            ? ['payment_method'=>'credit_card','credit_card'=>['installments'=>1,'statement_descriptor'=>'CINESYS','card_token'=>$cardToken]]
+            : ['payment_method'=>'pix','pix'=>['expires_in'=>max(60, (int)($order['expires_epoch']??strtotime($order['expires_at'])) - time())]];
+        if ($method === 'cartao' && !$cardToken) throw new RuntimeException('Não foi possível proteger os dados do cartão. Tente novamente.');
         $payload = [
             'code' => $order['order_code'],
             'closed' => true,
