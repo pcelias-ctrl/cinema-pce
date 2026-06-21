@@ -55,7 +55,7 @@ p { line-height:1.5; }
 .portal-button.primary { background:var(--brand); color:#fff; }
 .text-link { justify-self:center; font-size:12px; font-weight:700; }
 .google-button { min-height:42px; display:flex; align-items:center; justify-content:center; padding:9px 12px; border:1px solid #bdb8b3; border-radius:4px; background:#fff; font-weight:800; }
-.google-button::before { content:"G"; width:22px; height:22px; display:grid; place-items:center; margin-right:8px; border-radius:50%; background:#4285f4; color:#fff; font-weight:900; }
+.google-button img { width:20px; height:20px; margin-right:9px; object-fit:contain; }
 .form-divider { position:relative; display:grid; place-items:center; color:var(--muted); font-size:10px; }
 .form-divider::before { position:absolute; left:0; right:0; height:1px; content:""; background:var(--line); }
 .form-divider span { position:relative; padding:0 8px; background:#fff; }

@@ -47,7 +47,7 @@ final class InfinitePay
             'handle' => $handle,
             'order_nsu' => (string) ($payload['order_nsu'] ?? ''),
             'transaction_nsu' => (string) ($payload['transaction_nsu'] ?? ''),
-            'slug' => (string) ($payload['slug'] ?? ''),
+            'slug' => (string) ($payload['slug'] ?? $payload['invoice_slug'] ?? ''),
         ];
         if ($handle === '' || in_array('', $request, true)) throw new RuntimeException('Notificação InfinitePay incompleta.');
         return self::request('/payment_check', $request);
