@@ -74,16 +74,17 @@
         const method = document.getElementById('public-payment-method');
         const cardFields = document.getElementById('public-card-fields');
         const payButton = document.getElementById('public-pay-button');
+        const gateway = checkout.dataset.gateway || 'pagarme';
         function updateCheckout() {
             const products = [...checkout.querySelectorAll('[data-product-price]')].reduce((sum, input) => sum + (Number(input.value) || 0) * Number(input.dataset.productPrice || 0), 0);
             productTotal.textContent = money(products);
             grandTotal.textContent = money(Number(checkout.dataset.ticketTotal || 0) + products);
-            cardFields.hidden = method.value !== 'cartao';
+            if (cardFields) cardFields.hidden = method.value !== 'cartao';
         }
         checkout.querySelectorAll('[data-product-price]').forEach((input) => input.addEventListener('input', updateCheckout));
         method.addEventListener('change', updateCheckout);
         checkout.addEventListener('submit', async (event) => {
-            if (method.value !== 'cartao' || document.getElementById('card-token').value) return;
+            if (gateway !== 'pagarme' || method.value !== 'cartao' || document.getElementById('card-token').value) return;
             event.preventDefault();
             const expiry = document.getElementById('card-expiry').value.replace(/\D/g, '');
             const payload = { type: 'card', card: { number: document.getElementById('card-number').value.replace(/\D/g, ''), holder_name: document.getElementById('card-holder').value.trim(), exp_month: Number(expiry.slice(0, 2)), exp_year: Number(`20${expiry.slice(2, 4)}`), cvv: document.getElementById('card-cvv').value.replace(/\D/g, '') } };

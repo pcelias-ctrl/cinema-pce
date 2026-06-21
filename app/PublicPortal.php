@@ -16,7 +16,10 @@ final class PublicPortal
         $db->exec("CREATE TABLE IF NOT EXISTS public_portal_settings (
             id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1, sales_enabled TINYINT(1) NOT NULL DEFAULT 0,
             hold_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 10,
+            payment_gateway ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme',
             pagarme_public_key VARCHAR(190) NULL, pagarme_secret_encrypted TEXT NULL, pagarme_webhook_secret_encrypted TEXT NULL,
+            pagarme_webhook_username VARCHAR(190) NULL, pagarme_webhook_password_encrypted TEXT NULL,
+            infinitepay_handle VARCHAR(190) NULL,
             google_client_id VARCHAR(255) NULL, google_client_secret_encrypted TEXT NULL,
             privacy_contact_email VARCHAR(190) NULL, cookie_policy_version VARCHAR(30) NOT NULL DEFAULT '1.0',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -48,6 +51,8 @@ final class PublicPortal
             tickets_total DECIMAL(10,2) NOT NULL DEFAULT 0, products_total DECIMAL(10,2) NOT NULL DEFAULT 0,
             total_amount DECIMAL(10,2) NOT NULL DEFAULT 0, pagarme_order_id VARCHAR(100) NULL,
             pagarme_charge_id VARCHAR(100) NULL, pix_qr_code TEXT NULL, pix_qr_code_url TEXT NULL,
+            payment_gateway ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme',
+            provider_reference VARCHAR(190) NULL, provider_checkout_url TEXT NULL, provider_transaction_nsu VARCHAR(190) NULL,
             provider_payload JSON NULL, expires_at DATETIME NULL, paid_at DATETIME NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -55,6 +60,20 @@ final class PublicPortal
             CONSTRAINT fk_public_orders_customer FOREIGN KEY (customer_id) REFERENCES public_customers(id),
             CONSTRAINT fk_public_orders_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+        self::ensureColumns($db, 'public_portal_settings', [
+            'payment_gateway' => "ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme' AFTER hold_minutes",
+            'pagarme_webhook_username' => 'VARCHAR(190) NULL AFTER pagarme_webhook_secret_encrypted',
+            'pagarme_webhook_password_encrypted' => 'TEXT NULL AFTER pagarme_webhook_username',
+            'infinitepay_handle' => 'VARCHAR(190) NULL AFTER pagarme_webhook_password_encrypted',
+        ]);
+        self::ensureColumns($db, 'public_orders', [
+            'payment_gateway' => "ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme' AFTER payment_method",
+            'provider_reference' => 'VARCHAR(190) NULL AFTER pix_qr_code_url',
+            'provider_checkout_url' => 'TEXT NULL AFTER provider_reference',
+            'provider_transaction_nsu' => 'VARCHAR(190) NULL AFTER provider_checkout_url',
+        ]);
+        $db->exec("UPDATE public_portal_settings SET pagarme_webhook_password_encrypted=pagarme_webhook_secret_encrypted WHERE pagarme_webhook_password_encrypted IS NULL AND pagarme_webhook_secret_encrypted IS NOT NULL");
 
         $db->exec("CREATE TABLE IF NOT EXISTS public_seat_holds (
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, order_id BIGINT UNSIGNED NOT NULL,
@@ -98,7 +117,7 @@ final class PublicPortal
     public static function settings(PDO $db): array
     {
         self::ensureSchema($db);
-        $defaults = ['sales_enabled'=>0,'hold_minutes'=>10,'pagarme_public_key'=>'','pagarme_secret_encrypted'=>'','pagarme_webhook_secret_encrypted'=>'','google_client_id'=>'','google_client_secret_encrypted'=>'','privacy_contact_email'=>'','cookie_policy_version'=>'1.0'];
+        $defaults = ['sales_enabled'=>0,'hold_minutes'=>10,'payment_gateway'=>'pagarme','pagarme_public_key'=>'','pagarme_secret_encrypted'=>'','pagarme_webhook_secret_encrypted'=>'','pagarme_webhook_username'=>'','pagarme_webhook_password_encrypted'=>'','infinitepay_handle'=>'','google_client_id'=>'','google_client_secret_encrypted'=>'','privacy_contact_email'=>'','cookie_policy_version'=>'1.0'];
         $row = $db->query('SELECT * FROM public_portal_settings WHERE id=1')->fetch();
         return array_merge($defaults, $row ?: []);
     }
@@ -179,6 +198,17 @@ final class PublicPortal
     public static function orderCode(): string
     {
         return 'ON' . date('YmdHis') . strtoupper(bin2hex(random_bytes(3)));
+    }
+
+    private static function ensureColumns(PDO $db, string $table, array $definitions): void
+    {
+        $columns = $db->query('SHOW COLUMNS FROM `' . $table . '`')->fetchAll();
+        $existing = array_flip(array_column($columns, 'Field'));
+        foreach ($definitions as $name => $definition) {
+            if (!isset($existing[$name])) {
+                $db->exec('ALTER TABLE `' . $table . '` ADD COLUMN `' . $name . '` ' . $definition);
+            }
+        }
     }
 
     public static function finalizePaidOrder(PDO $db, int $orderId, array $providerPayload): void
