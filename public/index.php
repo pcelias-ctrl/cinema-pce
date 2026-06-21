@@ -58,6 +58,11 @@ function public_phone_link(string $number, string $label, string $type = 'tel'):
     return '<a href="' . e($href) . '">' . e($label . ': ' . $number) . '</a>';
 }
 
+function public_now_local(): string
+{
+    return (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s');
+}
+
 function confirm_infinitepay_order(PDO $db, array $settings, array $order, array $payload): bool
 {
     $verified=InfinitePay::verifyPayment($settings,$payload);
@@ -265,8 +270,8 @@ if ($action === 'hold' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$seatIds) { header('Location: /?action=seats&showtime_id=' . $showtimeId . '&error=no_seats'); exit; }
     $db->beginTransaction();
     try {
-        $showtimeStmt = $db->prepare("SELECT showtimes.*,rooms.id room_id FROM showtimes INNER JOIN rooms ON rooms.id=showtimes.room_id WHERE showtimes.id=? AND showtimes.status='programada' AND showtimes.starts_at>NOW() FOR UPDATE");
-        $showtimeStmt->execute([$showtimeId]);
+        $showtimeStmt = $db->prepare("SELECT showtimes.*,rooms.id room_id FROM showtimes INNER JOIN rooms ON rooms.id=showtimes.room_id WHERE showtimes.id=? AND showtimes.status='programada' AND showtimes.starts_at>? FOR UPDATE");
+        $showtimeStmt->execute([$showtimeId, public_now_local()]);
         $showtime = $showtimeStmt->fetch();
         if (!$showtime) throw new RuntimeException('Sessão indisponível.');
         $db->prepare("DELETE public_seat_holds FROM public_seat_holds INNER JOIN public_orders ON public_orders.id=public_seat_holds.order_id WHERE public_seat_holds.expires_at<=NOW() AND public_orders.status IN ('rascunho','aguardando_pagamento','expirado','cancelado')")->execute();
@@ -397,6 +402,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $timezone = new DateTimeZone('America/Sao_Paulo');
 $today = new DateTimeImmutable('today', $timezone);
+$nowLocal = public_now_local();
 $selectedDate = $_GET['date'] ?? $today->format('Y-m-d');
 $parsedDate = DateTimeImmutable::createFromFormat('!Y-m-d', $selectedDate, $timezone);
 if (!$parsedDate) { $parsedDate = $today; $selectedDate = $today->format('Y-m-d'); }
@@ -418,16 +424,16 @@ if ($action === 'catalog') {
         (SELECT COUNT(*) FROM public_seat_holds WHERE showtime_id=showtimes.id AND expires_at>NOW()) held
         FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id
         WHERE showtimes.status='programada' AND movies.active=1 AND rooms.active=1 AND DATE(showtimes.starts_at)=?
-        AND showtimes.starts_at>NOW() ORDER BY movies.title,showtimes.starts_at");
-    $stmt->execute([$selectedDate]);
+        AND showtimes.starts_at>? ORDER BY movies.title,showtimes.starts_at");
+    $stmt->execute([$selectedDate, $nowLocal]);
     foreach ($stmt->fetchAll() as $session) {
         $movieId = (int) $session['movie_id'];
         if (!isset($movies[$movieId])) $movies[$movieId] = ['info' => $session, 'sessions' => []];
         $movies[$movieId]['sessions'][] = $session;
     }
 } elseif ($action === 'seats') {
-    $stmt = $db->prepare("SELECT showtimes.*,movies.id movie_id,movies.title,movies.age_rating,movies.cover_data IS NOT NULL has_cover,rooms.id room_id,rooms.name room_name,rooms.screen_config FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id WHERE showtimes.id=? AND showtimes.status='programada' AND showtimes.starts_at>NOW()");
-    $stmt->execute([(int)($_GET['showtime_id']??0)]);
+    $stmt = $db->prepare("SELECT showtimes.*,movies.id movie_id,movies.title,movies.age_rating,movies.cover_data IS NOT NULL has_cover,rooms.id room_id,rooms.name room_name,rooms.screen_config FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id WHERE showtimes.id=? AND showtimes.status='programada' AND showtimes.starts_at>?");
+    $stmt->execute([(int)($_GET['showtime_id']??0), $nowLocal]);
     $session = $stmt->fetch();
     if ($session) {
         $seatsStmt = $db->prepare("SELECT room_seats.*,tickets.id sold_ticket_id,public_seat_holds.id held_id FROM room_seats LEFT JOIN tickets ON tickets.room_seat_id=room_seats.id AND tickets.showtime_id=? AND tickets.status IN ('reservado','vendido') LEFT JOIN public_seat_holds ON public_seat_holds.room_seat_id=room_seats.id AND public_seat_holds.showtime_id=? AND public_seat_holds.expires_at>NOW() WHERE room_seats.room_id=? ORDER BY room_seats.row_label,room_seats.seat_number");
