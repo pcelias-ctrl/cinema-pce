@@ -96,13 +96,36 @@
             if (!method || method.value !== 'cartao' || !tokenInput || tokenInput.value) return;
             event.preventDefault();
             const expiry = document.getElementById('card-expiry').value.replace(/\D/g, '');
-            const payload = { type: 'card', card: { number: document.getElementById('card-number').value.replace(/\D/g, ''), holder_name: document.getElementById('card-holder').value.trim(), exp_month: Number(expiry.slice(0, 2)), exp_year: Number(`20${expiry.slice(2, 4)}`), cvv: document.getElementById('card-cvv').value.replace(/\D/g, '') } };
+            const number = document.getElementById('card-number').value.replace(/\D/g, '');
+            const holderName = document.getElementById('card-holder').value.trim();
+            const cvv = document.getElementById('card-cvv').value.replace(/\D/g, '');
+            const expMonth = Number(expiry.slice(0, 2));
+            const expYear = expiry.length === 6 ? Number(expiry.slice(2, 6)) : Number(`20${expiry.slice(2, 4)}`);
+            const now = new Date();
+            const luhnValid = number.length >= 13 && number.length <= 19 && [...number].reverse().reduce((sum, digit, index) => {
+                let value = Number(digit) * (index % 2 ? 2 : 1);
+                if (value > 9) value -= 9;
+                return sum + value;
+            }, 0) % 10 === 0;
+            if (!luhnValid) { window.alert('Confira o número do cartão.'); return; }
+            if (holderName.length < 3) { window.alert('Informe o nome impresso no cartão.'); return; }
+            if (![4, 6].includes(expiry.length) || expMonth < 1 || expMonth > 12 || expYear < now.getFullYear() || (expYear === now.getFullYear() && expMonth < now.getMonth() + 1)) { window.alert('Informe uma validade futura no formato MM/AA ou MM/AAAA.'); return; }
+            if (!/^\d{3,4}$/.test(cvv)) { window.alert('Confira o código de segurança do cartão.'); return; }
+            const payload = { type: 'card', card: { number, holder_name: holderName, exp_month: expMonth, exp_year: expYear, cvv } };
             payButton.disabled = true;
             payButton.textContent = 'Protegendo cartão...';
             try {
                 const response = await fetch(`https://api.pagar.me/core/v5/tokens?appId=${encodeURIComponent(checkout.dataset.pagarmeKey)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const data = await response.json();
-                if (!response.ok || !data.id) throw new Error(data.message || 'Confira os dados do cartão.');
+                if (!response.ok || !data.id) {
+                    const details = [];
+                    const collect = (value) => {
+                        if (typeof value === 'string' && value.trim()) details.push(value.trim());
+                        else if (value && typeof value === 'object') Object.values(value).forEach(collect);
+                    };
+                    collect(data.errors);
+                    throw new Error(details.join(' ') || data.message || 'Confira os dados do cartão.');
+                }
                 tokenInput.value = data.id;
                 checkout.submit();
             } catch (error) {
