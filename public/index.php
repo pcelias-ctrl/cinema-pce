@@ -60,7 +60,7 @@ if ($action === 'product_image') {
 }
 
 if ($action === 'logout') {
-    unset($_SESSION['public_customer_id']);
+    unset($_SESSION['public_customer_id'], $_SESSION['public_pending_email']);
     header('Location: /');
     exit;
 }
@@ -231,7 +231,18 @@ if ($action === 'pay' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
-    if ($action === 'google_complete') {
+    if ($action === 'verify') {
+        $email = strtolower(trim((string) ($_SESSION['public_pending_email'] ?? $_POST['email'] ?? '')));
+        $code = PublicPortal::normalizeDigits($_POST['code'] ?? '');
+        if (PublicPortal::consumeLoginCode($db, $email, $code)) {
+            $returnTo = $_SESSION['public_return'] ?? '/?action=account';
+            unset($_SESSION['public_return']);
+            header('Location: ' . $returnTo);
+            exit;
+        }
+        $error = 'Código inválido, expirado ou com muitas tentativas. Solicite um novo código.';
+        $action = 'verify';
+    } elseif ($action === 'google_complete') {
         try {
             $pending=$_SESSION['google_pending']??null;if(!$pending)throw new RuntimeException('O acesso Google expirou.');
             $cpf=PublicPortal::normalizeDigits($_POST['cpf']??'');$whatsapp=PublicPortal::normalizeDigits($_POST['whatsapp']??'');$phone=PublicPortal::normalizeDigits($_POST['phone']??'');$address=trim($_POST['address']??'')?:null;
@@ -255,11 +266,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $db->prepare('INSERT INTO public_customers(name,cpf,email,whatsapp,phone,address,privacy_accepted_at) VALUES(?,?,?,?,?,?,NOW())');
             $stmt->execute([$name, $cpf, $email, $whatsapp, $phone, $address]);
             $customerId = (int) $db->lastInsertId();
-            $token = PublicPortal::createLoginToken($db, $customerId);
-            $link = PublicPortal::publicUrl(['action' => 'token', 'token' => $token]);
-            Mailer::send($db, $email, 'Confirme seu acesso - ' . $cinema['cinema_name'], '<h2>Olá, ' . e($name) . '</h2><p>Use o botão abaixo para confirmar seu e-mail e acessar seus ingressos.</p><p><a href="' . e($link) . '" style="display:inline-block;padding:12px 18px;background:#c2410c;color:#fff;text-decoration:none">Confirmar meu acesso</a></p><p>O link expira em 20 minutos.</p>');
-            $message = 'Cadastro realizado. Enviamos um link de confirmação para seu e-mail.';
-            $action = 'access';
+            $code = PublicPortal::createLoginCode($db, $customerId);
+            Mailer::send($db, $email, 'Código de acesso - ' . $cinema['cinema_name'], '<h2>Olá, ' . e($name) . '</h2><p>Seu código de confirmação é:</p><p style="font-size:32px;font-weight:bold;letter-spacing:6px">' . e($code) . '</p><p>Digite este código na loja. Ele expira em 10 minutos e pode ser usado uma única vez.</p>');
+            $_SESSION['public_pending_email'] = $email;
+            $message = 'Cadastro realizado. Enviamos um código de 6 dígitos para seu e-mail.';
+            $action = 'verify';
         } catch (PDOException $exception) {
             $error = (string) $exception->getCode() === '23000' ? 'Já existe uma conta com este CPF ou e-mail. Use “Receber link de acesso”.' : 'Não foi possível concluir o cadastro.';
         } catch (Throwable $exception) {
@@ -275,15 +286,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $account = $stmt->fetch();
             if ($account) {
                 try {
-                    $token = PublicPortal::createLoginToken($db, (int) $account['id']);
-                    $link = PublicPortal::publicUrl(['action' => 'token', 'token' => $token]);
-                    Mailer::send($db, $account['email'], 'Seu link de acesso - ' . $cinema['cinema_name'], '<h2>Olá, ' . e($account['name']) . '</h2><p><a href="' . e($link) . '" style="display:inline-block;padding:12px 18px;background:#c2410c;color:#fff;text-decoration:none">Acessar meus ingressos</a></p><p>Este link é de uso único e expira em 20 minutos.</p>');
+                    $code = PublicPortal::createLoginCode($db, (int) $account['id']);
+                    Mailer::send($db, $account['email'], 'Código de acesso - ' . $cinema['cinema_name'], '<h2>Olá, ' . e($account['name']) . '</h2><p>Seu código de acesso é:</p><p style="font-size:32px;font-weight:bold;letter-spacing:6px">' . e($code) . '</p><p>Digite este código na loja. Ele expira em 10 minutos e pode ser usado uma única vez.</p>');
+                    $_SESSION['public_pending_email'] = $account['email'];
+                    $message = 'Enviamos um código de 6 dígitos para seu e-mail.';
+                    $action = 'verify';
                 } catch (Throwable $exception) {
                     error_log('Falha no login por e-mail: ' . $exception->getMessage());
                     $error = 'O envio de e-mail está temporariamente indisponível. Tente novamente em alguns minutos.';
                 }
             }
-            if ($error === '') $message = 'Se o e-mail estiver cadastrado, você receberá um link de acesso válido por 20 minutos.';
+            if ($error === '' && !$account) $message = 'Se o e-mail estiver cadastrado, você receberá um código de acesso.';
         }
     }
 }
@@ -365,8 +378,10 @@ public_layout($action === 'catalog' ? 'Ingressos' : 'Minha conta', $cinema, $cus
         <section class="account-shell compact"><div><span class="eyebrow">Complete seu cadastro</span><h1><?=e($pending['name']??'Conta Google')?></h1><p><?=e($pending['email']??'')?></p></div><form method="post" class="portal-form"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><label>CPF<input name="cpf" required inputmode="numeric" maxlength="14"></label><div class="form-columns"><label>WhatsApp<input name="whatsapp" required inputmode="tel"></label><label>Telefone<input name="phone" required inputmode="tel"></label></div><label>Endereço <small>Opcional</small><textarea name="address" rows="2"></textarea></label><label class="privacy-check"><input type="checkbox" name="privacy_accept" value="1" required><span>Li e aceito a <a href="/?action=privacy" target="_blank">Política de Privacidade</a>.</span></label><button class="portal-button primary">Concluir cadastro</button></form></section>
     <?php } elseif ($action === 'register') { ?>
         <section class="account-shell"><div><span class="eyebrow">Conta do cliente</span><h1>Crie sua conta</h1><p>Seus ingressos e produtos ficarão disponíveis pelo seu e-mail.</p></div><form method="post" class="portal-form"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><?php if($portalSettings['google_client_id']&&$portalSettings['google_client_secret_encrypted']):?><a class="google-button" href="/?action=google">Continuar com Google</a><div class="form-divider"><span>ou</span></div><?php endif;?><label>Nome completo<input name="name" required autocomplete="name"></label><div class="form-columns"><label>CPF<input name="cpf" required inputmode="numeric" maxlength="14"></label><label>E-mail<input name="email" type="email" required autocomplete="email"></label><label>WhatsApp<input name="whatsapp" required inputmode="tel" autocomplete="tel"></label><label>Telefone<input name="phone" required inputmode="tel"></label></div><label>Endereço <small>Opcional</small><textarea name="address" rows="2" autocomplete="street-address"></textarea></label><label class="privacy-check"><input type="checkbox" name="privacy_accept" value="1" required><span>Li e aceito a <a href="/?action=privacy" target="_blank">Política de Privacidade</a>.</span></label><button class="portal-button primary">Criar conta e confirmar e-mail</button><a class="text-link" href="/?action=access">Já tenho cadastro</a></form></section>
+    <?php } elseif ($action === 'verify') { $pendingEmail=(string)($_SESSION['public_pending_email']??''); ?>
+        <section class="account-shell compact"><div><span class="eyebrow">Confirmação por e-mail</span><h1>Digite o código</h1><p>Enviamos 6 números para <?=e($pendingEmail?preg_replace('/(^.).*(@.*$)/','$1***$2',$pendingEmail):'seu e-mail')?>.</p></div><form method="post" class="portal-form code-form"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="email" value="<?=e($pendingEmail)?>"><label>Código de acesso<input name="code" required autofocus inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000"></label><button class="portal-button primary">Confirmar e entrar</button><a class="text-link" href="/?action=access">Enviar um novo código</a></form></section>
     <?php } elseif ($action === 'access') { ?>
-        <section class="account-shell compact"><div><span class="eyebrow">Acesso seguro</span><h1>Receba seu link</h1><p>Não usamos senha. Enviaremos um link de uso único para seu e-mail.</p></div><form method="post" class="portal-form"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><?php if($portalSettings['google_client_id']&&$portalSettings['google_client_secret_encrypted']):?><a class="google-button" href="/?action=google">Continuar com Google</a><div class="form-divider"><span>ou</span></div><?php endif;?><label>E-mail cadastrado<input name="email" type="email" required autofocus autocomplete="email"></label><button class="portal-button primary">Enviar link de acesso</button><a class="text-link" href="/?action=register">Criar uma conta</a></form></section>
+        <section class="account-shell compact"><div><span class="eyebrow">Acesso seguro</span><h1>Receba seu código</h1><p>Não usamos senha. Enviaremos um código numérico de uso único para seu e-mail.</p></div><form method="post" class="portal-form"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><?php if($portalSettings['google_client_id']&&$portalSettings['google_client_secret_encrypted']):?><a class="google-button" href="/?action=google">Continuar com Google</a><div class="form-divider"><span>ou</span></div><?php endif;?><label>E-mail cadastrado<input name="email" type="email" required autofocus autocomplete="email"></label><button class="portal-button primary">Enviar código de acesso</button><a class="text-link" href="/?action=register">Criar uma conta</a></form></section>
     <?php } elseif ($action === 'payment') { if(!$paymentContext){?><section class="empty-state"><strong>Pedido não encontrado</strong><a class="portal-button primary" href="/?action=account">Meus ingressos</a></section><?php return;}?>
         <section class="payment-result <?=$paymentContext['status']==='pago'?'paid':'pending'?>"><span class="eyebrow">Pedido <?=e($paymentContext['order_code'])?></span><?php if($paymentContext['status']==='pago'):?><h1>Pagamento confirmado</h1><p>Seus documentos já estão disponíveis.</p><div class="payment-actions"><a class="portal-button primary" href="/?action=tickets_pdf&order=<?=e($paymentContext['order_code'])?>">Baixar ingressos em PDF</a><?php if((float)$paymentContext['products_total']>0):?><a class="portal-button" href="/?action=products_pdf&order=<?=e($paymentContext['order_code'])?>">Baixar produtos em PDF</a><?php endif;?></div><?php elseif($paymentContext['payment_gateway']==='infinitepay'):?><h1>Aguardando confirmação da InfinitePay</h1><p>Após concluir o Pix ou cartão, a confirmação aparecerá automaticamente.</p><?php if($paymentContext['provider_checkout_url']):?><a class="portal-button primary" href="<?=e($paymentContext['provider_checkout_url'])?>">Continuar pagamento</a><?php endif;?><?php elseif($paymentContext['payment_method']==='pix'):?><h1>Aguardando pagamento Pix</h1><p>Escaneie o QR Code ou copie o código. A página confirma automaticamente.</p><div class="pix-box"><div data-pix-qr data-value="<?=e($paymentContext['pix_qr_code'])?>"></div><textarea readonly id="pix-code"><?=e($paymentContext['pix_qr_code'])?></textarea><button class="portal-button" type="button" data-copy-pix>Copiar código Pix</button></div><?php else:?><h1>Pagamento em processamento</h1><p>A confirmação pode levar alguns instantes.</p><?php endif;?></section>
     <?php } elseif ($action === 'account') { ?>

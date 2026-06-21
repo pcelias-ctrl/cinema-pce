@@ -38,7 +38,8 @@ final class PublicPortal
 
         $db->exec("CREATE TABLE IF NOT EXISTS public_login_tokens (
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, customer_id INT UNSIGNED NOT NULL,
-            token_hash CHAR(64) NOT NULL UNIQUE, expires_at DATETIME NOT NULL, used_at DATETIME NULL,
+            token_hash CHAR(64) NOT NULL UNIQUE, attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            expires_at DATETIME NOT NULL, used_at DATETIME NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_public_login_expiry (expires_at),
             CONSTRAINT fk_public_login_customer FOREIGN KEY (customer_id) REFERENCES public_customers(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
@@ -72,6 +73,9 @@ final class PublicPortal
             'provider_reference' => 'VARCHAR(190) NULL AFTER pix_qr_code_url',
             'provider_checkout_url' => 'TEXT NULL AFTER provider_reference',
             'provider_transaction_nsu' => 'VARCHAR(190) NULL AFTER provider_checkout_url',
+        ]);
+        self::ensureColumns($db, 'public_login_tokens', [
+            'attempts' => 'TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER token_hash',
         ]);
         $db->exec("UPDATE public_portal_settings SET pagarme_webhook_password_encrypted=pagarme_webhook_secret_encrypted WHERE pagarme_webhook_password_encrypted IS NULL AND pagarme_webhook_secret_encrypted IS NOT NULL");
 
@@ -159,6 +163,43 @@ final class PublicPortal
         $db->prepare('DELETE FROM public_login_tokens WHERE customer_id=? OR expires_at<=NOW()')->execute([$customerId]);
         $db->prepare('INSERT INTO public_login_tokens(customer_id,token_hash,expires_at) VALUES(?,?,?)')->execute([$customerId, hash('sha256', $token), $expires]);
         return $token;
+    }
+
+    public static function createLoginCode(PDO $db, int $customerId): string
+    {
+        $code = (string) random_int(100000, 999999);
+        $expires = (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->modify('+10 minutes')->format('Y-m-d H:i:s');
+        $db->prepare('DELETE FROM public_login_tokens WHERE customer_id=? OR expires_at<=NOW()')->execute([$customerId]);
+        $db->prepare('INSERT INTO public_login_tokens(customer_id,token_hash,attempts,expires_at) VALUES(?,?,0,?)')->execute([$customerId, hash('sha256', $code), $expires]);
+        return $code;
+    }
+
+    public static function consumeLoginCode(PDO $db, string $email, string $code): bool
+    {
+        $email = strtolower(trim($email));
+        $code = self::normalizeDigits($code);
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/^\d{6}$/', $code)) return false;
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('SELECT public_login_tokens.* FROM public_login_tokens INNER JOIN public_customers ON public_customers.id=public_login_tokens.customer_id WHERE public_customers.email=? AND public_customers.active=1 AND public_login_tokens.used_at IS NULL AND public_login_tokens.expires_at>NOW() ORDER BY public_login_tokens.id DESC LIMIT 1 FOR UPDATE');
+            $stmt->execute([$email]);
+            $row = $stmt->fetch();
+            if (!$row || (int) $row['attempts'] >= 5 || !hash_equals((string) $row['token_hash'], hash('sha256', $code))) {
+                if ($row) $db->prepare('UPDATE public_login_tokens SET attempts=attempts+1 WHERE id=?')->execute([(int) $row['id']]);
+                $db->commit();
+                return false;
+            }
+            $db->prepare('UPDATE public_login_tokens SET used_at=NOW() WHERE id=?')->execute([(int) $row['id']]);
+            $db->prepare('UPDATE public_customers SET email_verified_at=COALESCE(email_verified_at,NOW()) WHERE id=?')->execute([(int) $row['customer_id']]);
+            $_SESSION['public_customer_id'] = (int) $row['customer_id'];
+            unset($_SESSION['public_pending_email']);
+            session_regenerate_id(true);
+            $db->commit();
+            return true;
+        } catch (\Throwable $exception) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $exception;
+        }
     }
 
     public static function consumeLoginToken(PDO $db, string $token): bool

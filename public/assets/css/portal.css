@@ -46,6 +46,7 @@ p { line-height:1.5; }
 .portal-form label { display:grid; gap:5px; color:#4b4744; font-size:12px; font-weight:700; }
 .portal-form input,.portal-form textarea { width:100%; min-height:42px; padding:9px 10px; border:1px solid #cfcac5; border-radius:4px; background:#fff; color:var(--ink); outline:none; }
 .portal-form input:focus,.portal-form textarea:focus { border-color:var(--brand); box-shadow:0 0 0 3px rgba(194,65,12,.12); }
+.code-form input[name="code"] { min-height:58px; text-align:center; font-size:28px; font-weight:800; letter-spacing:8px; }
 .form-columns { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .privacy-check { grid-template-columns:20px 1fr !important; align-items:start; }
 .privacy-check input { width:18px; min-height:18px; }
