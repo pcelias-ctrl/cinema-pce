@@ -14,6 +14,8 @@ final class InfinitePay
     {
         $handle = ltrim(trim((string) ($settings['infinitepay_handle'] ?? '')), '@');
         if ($handle === '') throw new RuntimeException('O handle da InfinitePay não foi configurado.');
+        $totalCents = array_reduce($items, static fn(int $total, array $item): int => $total + ((int) $item['amount'] * (int) $item['quantity']), 0);
+        if ($totalCents < 100) throw new RuntimeException('A InfinitePay exige compra mínima de R$ 1,00. Ajuste o preço da sessão ou adicione produtos.');
 
         $payload = [
             'handle' => $handle,
