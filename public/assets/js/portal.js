@@ -19,6 +19,13 @@
         });
     }
 
+    document.querySelectorAll('.program-card[data-buy-url]').forEach((card) => {
+        card.addEventListener('click', (event) => {
+            if (event.target.closest('a,button,input,select,textarea')) return;
+            window.location.href = card.dataset.buyUrl;
+        });
+    });
+
     const banner = document.getElementById('cookie-banner');
     const storageKey = 'cinesys_cookie_consent';
     if (banner && !localStorage.getItem(storageKey)) banner.hidden = false;
