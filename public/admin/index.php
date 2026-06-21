@@ -1819,7 +1819,7 @@ try {
                                 <?php foreach ($products as $product): ?>
                                     <article class="product-pick-card" data-category="<?= (int) $product['category_id'] ?>" data-price="<?= e($product['price']) ?>">
                                         <?php if ($product['has_image']): ?><img class="product-pick-image" src="index.php?route=product_image&id=<?= (int) $product['id'] ?>" alt=""><?php else: ?><span class="product-pick-image placeholder"><i data-lucide="package"></i></span><?php endif; ?>
-                                        <div><strong><?= e($product['name']) ?></strong><span><?= e($product['category_name']) ?></span><b>R$ <?= e(number_format((float) $product['price'], 2, ',', '.')) ?></b></div>
+                                        <div class="product-pick-info"><strong><?= e($product['name']) ?></strong><span><?= e($product['category_name']) ?></span><b>R$ <?= e(number_format((float) $product['price'], 2, ',', '.')) ?></b></div>
                                         <div class="quantity-stepper"><button type="button" data-delta="-1" aria-label="Diminuir">−</button><input name="product_qty[<?= (int) $product['id'] ?>]" type="number" min="0" max="20" value="0" readonly><button type="button" data-delta="1" aria-label="Adicionar">+</button></div>
                                     </article>
                                 <?php endforeach; ?>
