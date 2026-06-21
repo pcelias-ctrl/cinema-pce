@@ -31,7 +31,21 @@ final class Pagarme
             'items' => $items,
             'payments' => [$payment],
         ];
-        return self::request('POST', '/orders', $secret, $payload, $order['order_code']);
+        $response = self::request('POST', '/orders', $secret, $payload, $order['order_code']);
+        if (($response['status'] ?? '') === 'failed') {
+            $errors = $response['charges'][0]['last_transaction']['gateway_response']['errors'] ?? [];
+            $messages = [];
+            foreach ($errors as $error) {
+                if (is_array($error) && !empty($error['message'])) $messages[] = (string) $error['message'];
+                elseif (is_string($error)) $messages[] = $error;
+            }
+            $message = trim(implode(' ', $messages));
+            if (str_contains($message, 'Sem ambiente configurado')) {
+                throw new RuntimeException('O Pix ainda não está habilitado na conta Pagar.me. Ative o Pix no painel Pagar.me ou escolha InfinitePay.');
+            }
+            throw new RuntimeException($message !== '' ? 'Pagamento recusado pelo Pagar.me: ' . $message : 'O Pagar.me recusou a criação do pagamento.');
+        }
+        return $response;
     }
 
     public static function getOrder(array $settings, string $providerOrderId): array

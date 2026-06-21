@@ -75,16 +75,30 @@
         const productTotal = document.getElementById('checkout-products-total');
         const grandTotal = document.getElementById('checkout-grand-total');
         const method = document.getElementById('public-payment-method');
+        const gatewaySelect = document.getElementById('public-payment-gateway');
+        const pagarmeOptions = document.getElementById('pagarme-payment-options');
+        const infinitepayOptions = document.getElementById('infinitepay-payment-options');
         const cardFields = document.getElementById('public-card-fields');
         const payButton = document.getElementById('public-pay-button');
-        const gateway = checkout.dataset.gateway || 'pagarme';
+        let gateway = checkout.dataset.gateway || 'pagarme';
         function updateCheckout() {
             const products = [...checkout.querySelectorAll('[data-product-price]')].reduce((sum, input) => sum + (Number(input.value) || 0) * Number(input.dataset.productPrice || 0), 0);
             productTotal.textContent = money(products);
             grandTotal.textContent = money(Number(checkout.dataset.ticketTotal || 0) + products);
-            if (cardFields) cardFields.hidden = method.value !== 'cartao';
+            gateway = gatewaySelect ? gatewaySelect.value : gateway;
+            checkout.dataset.gateway = gateway;
+            if (pagarmeOptions) pagarmeOptions.hidden = gateway !== 'pagarme';
+            if (infinitepayOptions) infinitepayOptions.hidden = gateway !== 'infinitepay';
+            if (cardFields) cardFields.hidden = gateway !== 'pagarme' || method.value !== 'cartao';
         }
         checkout.querySelectorAll('[data-product-price]').forEach((input) => input.addEventListener('input', updateCheckout));
+        checkout.querySelectorAll('[data-qty-minus],[data-qty-plus]').forEach((button) => button.addEventListener('click', () => {
+            const input = button.parentElement.querySelector('[data-product-price]');
+            const direction = button.hasAttribute('data-qty-plus') ? 1 : -1;
+            input.value = String(Math.max(Number(input.min), Math.min(Number(input.max), Number(input.value) + direction)));
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }));
+        if (gatewaySelect) gatewaySelect.addEventListener('change', updateCheckout);
         method.addEventListener('change', updateCheckout);
         checkout.addEventListener('submit', async (event) => {
             if (gateway !== 'pagarme' || method.value !== 'cartao' || document.getElementById('card-token').value) return;
