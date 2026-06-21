@@ -13,6 +13,11 @@ use CinemaPce\SettingCrypto;
 require __DIR__ . '/../app/bootstrap.php';
 
 $legacyAdminRoute = trim($_GET['route'] ?? '');
+if ($legacyAdminRoute === 'health') {
+    header('Content-Type: text/plain; charset=UTF-8');
+    echo 'ok';
+    exit;
+}
 if ($legacyAdminRoute !== '') {
     header('Location: /admin/index.php?' . http_build_query($_GET));
     exit;
