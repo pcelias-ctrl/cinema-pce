@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 $config = require __DIR__ . '/../config/config.php';
+$composerAutoload = __DIR__ . '/../vendor/autoload.php';
+if (is_file($composerAutoload)) require $composerAutoload;
 
 $sessionPdo = null;
 $sessionConnection = static function () use (&$sessionPdo, $config): PDO {

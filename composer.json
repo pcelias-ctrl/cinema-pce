@@ -9,7 +9,8 @@
     "ext-pdo_mysql": "*",
     "ext-json": "*",
     "ext-fileinfo": "*",
-    "ext-gd": "*"
+    "ext-gd": "*",
+    "dompdf/dompdf": "3.1",
+    "endroid/qr-code": "5.0"
   }
 }
-

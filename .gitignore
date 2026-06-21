@@ -1,4 +1,8 @@
 /.env
+/vendor/
+/*.pem
+/*.ppk
+/puttygen.exe
 /.cinema-db-pass.local
 /public/uploads/*
 !/public/uploads/.gitkeep

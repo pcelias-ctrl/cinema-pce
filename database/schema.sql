@@ -211,3 +211,98 @@ CREATE TABLE product_sale_items (
     CONSTRAINT fk_product_items_product FOREIGN KEY (product_id) REFERENCES products(id),
     CONSTRAINT fk_product_items_delivered_by FOREIGN KEY (delivered_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE public_customers (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(160) NOT NULL,
+    cpf VARCHAR(11) NOT NULL UNIQUE,
+    email VARCHAR(190) NOT NULL UNIQUE,
+    whatsapp VARCHAR(20) NOT NULL,
+    phone VARCHAR(20) NOT NULL,
+    address TEXT NULL,
+    google_sub VARCHAR(190) NULL UNIQUE,
+    email_verified_at DATETIME NULL,
+    active TINYINT(1) NOT NULL DEFAULT 1,
+    privacy_accepted_at DATETIME NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE public_portal_settings (
+    id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1,
+    sales_enabled TINYINT(1) NOT NULL DEFAULT 0,
+    hold_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 10,
+    pagarme_public_key VARCHAR(190) NULL,
+    pagarme_secret_encrypted TEXT NULL,
+    pagarme_webhook_secret_encrypted TEXT NULL,
+    google_client_id VARCHAR(255) NULL,
+    google_client_secret_encrypted TEXT NULL,
+    privacy_contact_email VARCHAR(190) NULL,
+    cookie_policy_version VARCHAR(30) NOT NULL DEFAULT '1.0',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE public_login_tokens (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    customer_id INT UNSIGNED NOT NULL,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    expires_at DATETIME NOT NULL,
+    used_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_public_login_expiry (expires_at),
+    CONSTRAINT fk_public_login_customer FOREIGN KEY (customer_id) REFERENCES public_customers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE public_orders (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    order_code VARCHAR(40) NOT NULL UNIQUE,
+    customer_id INT UNSIGNED NOT NULL,
+    showtime_id INT UNSIGNED NOT NULL,
+    payment_method ENUM('pix','cartao') NOT NULL,
+    status ENUM('rascunho','aguardando_pagamento','pago','cancelado','expirado','estornado') NOT NULL DEFAULT 'rascunho',
+    tickets_total DECIMAL(10,2) NOT NULL DEFAULT 0,
+    products_total DECIMAL(10,2) NOT NULL DEFAULT 0,
+    total_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+    pagarme_order_id VARCHAR(100) NULL,
+    pagarme_charge_id VARCHAR(100) NULL,
+    pix_qr_code TEXT NULL,
+    pix_qr_code_url TEXT NULL,
+    provider_payload JSON NULL,
+    expires_at DATETIME NULL,
+    paid_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_public_orders_customer (customer_id, created_at),
+    INDEX idx_public_orders_status (status, expires_at),
+    CONSTRAINT fk_public_orders_customer FOREIGN KEY (customer_id) REFERENCES public_customers(id),
+    CONSTRAINT fk_public_orders_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE public_seat_holds (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    order_id BIGINT UNSIGNED NOT NULL,
+    showtime_id INT UNSIGNED NOT NULL,
+    room_seat_id INT UNSIGNED NOT NULL,
+    ticket_type ENUM('inteira','meia') NOT NULL DEFAULT 'inteira',
+    unit_price DECIMAL(10,2) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_public_hold_seat (showtime_id, room_seat_id),
+    CONSTRAINT fk_public_hold_order FOREIGN KEY (order_id) REFERENCES public_orders(id) ON DELETE CASCADE,
+    CONSTRAINT fk_public_hold_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id),
+    CONSTRAINT fk_public_hold_seat FOREIGN KEY (room_seat_id) REFERENCES room_seats(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE public_order_products (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    order_id BIGINT UNSIGNED NOT NULL,
+    product_id INT UNSIGNED NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    qr_token VARCHAR(80) NULL UNIQUE,
+    status ENUM('aguardando_pagamento','pendente','entregue','cancelado') NOT NULL DEFAULT 'aguardando_pagamento',
+    delivered_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_public_order_product_order FOREIGN KEY (order_id) REFERENCES public_orders(id) ON DELETE CASCADE,
+    CONSTRAINT fk_public_order_product_product FOREIGN KEY (product_id) REFERENCES products(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
