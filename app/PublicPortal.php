@@ -121,6 +121,7 @@ final class PublicPortal
     {
         $defaults = ['cinema_name' => 'Cinema PCE', 'address' => '', 'phone' => '', 'whatsapp' => '', 'email' => '', 'has_logo' => false, 'public_products_enabled' => 1];
         try {
+            self::ensureCinemaSettingsColumns($db);
             $row = $db->query('SELECT cinema_name,address,phone,whatsapp,email,logo_data IS NOT NULL has_logo,public_products_enabled FROM cinema_settings WHERE id=1')->fetch();
             return array_merge($defaults, $row ?: []);
         } catch (\Throwable $exception) {
@@ -131,6 +132,15 @@ final class PublicPortal
                 return $defaults;
             }
         }
+    }
+
+    private static function ensureCinemaSettingsColumns(PDO $db): void
+    {
+        self::ensureColumns($db, 'cinema_settings', [
+            'public_products_enabled' => 'TINYINT(1) NOT NULL DEFAULT 1',
+            'admin_products_enabled' => 'TINYINT(1) NOT NULL DEFAULT 1',
+            'qr_beep_enabled' => 'TINYINT(1) NOT NULL DEFAULT 1',
+        ]);
     }
 
     public static function settings(PDO $db): array
