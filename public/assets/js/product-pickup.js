@@ -11,6 +11,19 @@
     let detector = null;
     let scanning = false;
 
+    function beep() {
+        if (window.cinemaQrBeepEnabled === false) return;
+        try {
+            const context = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            oscillator.frequency.value = 880;
+            gain.gain.value = 0.08;
+            oscillator.connect(gain); gain.connect(context.destination);
+            oscillator.start(); oscillator.stop(context.currentTime + 0.12);
+        } catch (error) {}
+    }
+
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     }
@@ -43,6 +56,7 @@
             if (data.item.status !== 'pendente') throw new Error(`Produto já ${data.item.status}.`);
             if (items.has(String(data.item.id))) throw new Error('Este produto já está na lista.');
             items.set(String(data.item.id), data.item);
+            beep();
             render();
             status.textContent = `${data.item.product_name} adicionado.`;
         } catch (error) { status.textContent = error.message; }

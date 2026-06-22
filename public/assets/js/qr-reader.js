@@ -12,6 +12,19 @@
         status.textContent = message;
     }
 
+    function beep() {
+        if (window.cinemaQrBeepEnabled === false) return;
+        try {
+            const context = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = context.createOscillator();
+            const gain = context.createGain();
+            oscillator.frequency.value = 880;
+            gain.gain.value = 0.08;
+            oscillator.connect(gain); gain.connect(context.destination);
+            oscillator.start(); oscillator.stop(context.currentTime + 0.12);
+        } catch (error) {}
+    }
+
     function validationUrl(value) {
         const text = String(value || '').trim();
         if (text.includes('route=ticket_validate')) return text;
@@ -34,6 +47,7 @@
         try {
             const codes = await detector.detect(video);
             if (codes.length > 0) {
+                beep();
                 stop();
                 window.location.href = validationUrl(codes[0].rawValue);
                 return;

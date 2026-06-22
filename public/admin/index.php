@@ -344,12 +344,13 @@ function cinema_settings(): array
 
     $defaults = [
         'id' => 1, 'cinema_name' => config_value('app_name'), 'cnpj' => '', 'address' => '',
-        'whatsapp' => '', 'phone' => '', 'email' => '', 'has_logo' => false, 'checkin_advance_minutes' => 30, 'smtp_enabled' => 0,
+        'whatsapp' => '', 'phone' => '', 'email' => '', 'has_logo' => false, 'checkin_advance_minutes' => 30,
+        'public_products_enabled' => 1, 'admin_products_enabled' => 1, 'qr_beep_enabled' => 1, 'smtp_enabled' => 0,
         'smtp_host' => '', 'smtp_port' => 587, 'smtp_encryption' => 'tls', 'smtp_auth' => 1,
         'smtp_username' => '', 'smtp_password_encrypted' => '', 'smtp_from_name' => '',
         'smtp_from_email' => '', 'smtp_reply_to' => '', 'smtp_timeout' => 30,
     ];
-    $sql = 'SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, checkin_advance_minutes, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1';
+    $sql = 'SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, checkin_advance_minutes, public_products_enabled, admin_products_enabled, qr_beep_enabled, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1';
     try {
         $row = db()->query($sql)->fetch();
         $settings = array_merge($defaults, $row ?: []);
@@ -378,6 +379,9 @@ function ensure_cinema_settings_table(): void
         logo_mime VARCHAR(80) NULL,
         logo_data LONGBLOB NULL,
         checkin_advance_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 30,
+        public_products_enabled TINYINT(1) NOT NULL DEFAULT 1,
+        admin_products_enabled TINYINT(1) NOT NULL DEFAULT 1,
+        qr_beep_enabled TINYINT(1) NOT NULL DEFAULT 1,
         smtp_enabled TINYINT(1) NOT NULL DEFAULT 0,
         smtp_host VARCHAR(255) NULL,
         smtp_port SMALLINT UNSIGNED NOT NULL DEFAULT 587,
@@ -399,6 +403,15 @@ function ensure_cinema_settings_table(): void
     $checkinColumn = db()->query("SHOW COLUMNS FROM cinema_settings LIKE 'checkin_advance_minutes'")->fetch();
     if (!$checkinColumn) {
         db()->exec('ALTER TABLE cinema_settings ADD COLUMN checkin_advance_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 30 AFTER logo_data');
+    }
+    foreach ([
+        'public_products_enabled' => 'AFTER checkin_advance_minutes',
+        'admin_products_enabled' => 'AFTER public_products_enabled',
+        'qr_beep_enabled' => 'AFTER admin_products_enabled',
+    ] as $column => $position) {
+        if (!db()->query("SHOW COLUMNS FROM cinema_settings LIKE '" . $column . "'")->fetch()) {
+            db()->exec('ALTER TABLE cinema_settings ADD COLUMN ' . $column . ' TINYINT(1) NOT NULL DEFAULT 1 ' . $position);
+        }
     }
     db()->exec("INSERT INTO cinema_settings (id, cinema_name) VALUES (1, 'Cinema PCE') ON DUPLICATE KEY UPDATE id=id");
 }
@@ -617,7 +630,7 @@ try {
     if ($route === 'cinema_settings') {
         Auth::requireAdmin();
         ensure_cinema_settings_table();
-        $stmt = db()->query('SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, checkin_advance_minutes, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1');
+        $stmt = db()->query('SELECT id, cinema_name, cnpj, address, whatsapp, phone, email, logo_data IS NOT NULL has_logo, checkin_advance_minutes, public_products_enabled, admin_products_enabled, qr_beep_enabled, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout FROM cinema_settings WHERE id = 1');
         $settings = $stmt->fetch() ?: cinema_settings();
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -627,9 +640,9 @@ try {
             $encryptedPassword = $password !== '' ? encrypt_setting($password) : ($settings['smtp_password_encrypted'] ?? '');
             $encryption = in_array($_POST['smtp_encryption'] ?? '', ['none', 'tls', 'ssl'], true) ? $_POST['smtp_encryption'] : 'tls';
             $sql = 'INSERT INTO cinema_settings
-                (id, cinema_name, cnpj, address, whatsapp, phone, email, checkin_advance_minutes, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout)
-                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE cinema_name=VALUES(cinema_name), cnpj=VALUES(cnpj), address=VALUES(address), whatsapp=VALUES(whatsapp), phone=VALUES(phone), email=VALUES(email), checkin_advance_minutes=VALUES(checkin_advance_minutes), smtp_enabled=VALUES(smtp_enabled), smtp_host=VALUES(smtp_host), smtp_port=VALUES(smtp_port), smtp_encryption=VALUES(smtp_encryption), smtp_auth=VALUES(smtp_auth), smtp_username=VALUES(smtp_username), smtp_password_encrypted=VALUES(smtp_password_encrypted), smtp_from_name=VALUES(smtp_from_name), smtp_from_email=VALUES(smtp_from_email), smtp_reply_to=VALUES(smtp_reply_to), smtp_timeout=VALUES(smtp_timeout)';
+                (id, cinema_name, cnpj, address, whatsapp, phone, email, checkin_advance_minutes, public_products_enabled, admin_products_enabled, qr_beep_enabled, smtp_enabled, smtp_host, smtp_port, smtp_encryption, smtp_auth, smtp_username, smtp_password_encrypted, smtp_from_name, smtp_from_email, smtp_reply_to, smtp_timeout)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE cinema_name=VALUES(cinema_name), cnpj=VALUES(cnpj), address=VALUES(address), whatsapp=VALUES(whatsapp), phone=VALUES(phone), email=VALUES(email), checkin_advance_minutes=VALUES(checkin_advance_minutes), public_products_enabled=VALUES(public_products_enabled), admin_products_enabled=VALUES(admin_products_enabled), qr_beep_enabled=VALUES(qr_beep_enabled), smtp_enabled=VALUES(smtp_enabled), smtp_host=VALUES(smtp_host), smtp_port=VALUES(smtp_port), smtp_encryption=VALUES(smtp_encryption), smtp_auth=VALUES(smtp_auth), smtp_username=VALUES(smtp_username), smtp_password_encrypted=VALUES(smtp_password_encrypted), smtp_from_name=VALUES(smtp_from_name), smtp_from_email=VALUES(smtp_from_email), smtp_reply_to=VALUES(smtp_reply_to), smtp_timeout=VALUES(smtp_timeout)';
             $save = db()->prepare($sql);
             $save->execute([
                 trim($_POST['cinema_name'] ?? '') ?: config_value('app_name'),
@@ -639,6 +652,9 @@ try {
                 trim($_POST['phone'] ?? '') ?: null,
                 trim($_POST['email'] ?? '') ?: null,
                 min(240, max(0, (int) ($_POST['checkin_advance_minutes'] ?? 30))),
+                isset($_POST['public_products_enabled']) ? 1 : 0,
+                isset($_POST['admin_products_enabled']) ? 1 : 0,
+                isset($_POST['qr_beep_enabled']) ? 1 : 0,
                 isset($_POST['smtp_enabled']) ? 1 : 0,
                 trim($_POST['smtp_host'] ?? '') ?: null,
                 max(1, (int) ($_POST['smtp_port'] ?? 587)),
@@ -676,6 +692,10 @@ try {
                     </div>
                     <label>Endereço<textarea name="address" rows="3"><?= e($settings['address']) ?></textarea></label>
                     <label>Antecedência para liberar check-in (minutos)<input name="checkin_advance_minutes" type="number" min="0" max="240" value="<?= e($settings['checkin_advance_minutes']) ?>"><small>Exemplo: 30 libera a entrada meia hora antes da sessão.</small></label>
+                    <div class="settings-title"><h2>Módulos e leitores</h2></div>
+                    <label class="check-label"><input type="checkbox" name="public_products_enabled" value="1" <?= $settings['public_products_enabled'] ? 'checked' : '' ?>> Habilitar delícias na venda pela internet</label>
+                    <label class="check-label"><input type="checkbox" name="admin_products_enabled" value="1" <?= $settings['admin_products_enabled'] ? 'checked' : '' ?>> Habilitar delícias na venda administrativa</label>
+                    <label class="check-label"><input type="checkbox" name="qr_beep_enabled" value="1" <?= $settings['qr_beep_enabled'] ? 'checked' : '' ?>> Tocar bip nas leituras de QR Code</label>
                     <div class="logo-upload-row">
                         <?php if ($settings['has_logo']): ?><img class="cinema-logo-preview" src="index.php?route=cinema_logo" alt="Logotipo atual"><?php endif; ?>
                         <label>Logotipo do cinema<input name="logo" type="file" accept="image/jpeg,image/png,image/webp"><small>JPG, PNG ou WEBP, até 3 MB. O arquivo será salvo no banco de dados.</small></label>
@@ -1638,7 +1658,8 @@ try {
                 $ticketTotal += $ticketType === 'meia' ? $halfPrice : $fullPrice;
             }
             $productQuantities = [];
-            foreach ((array) ($_POST['product_qty'] ?? []) as $productId => $quantity) {
+            $adminProductsEnabled = (int) (cinema_settings()['admin_products_enabled'] ?? 1) === 1;
+            foreach ($adminProductsEnabled ? (array) ($_POST['product_qty'] ?? []) : [] as $productId => $quantity) {
                 $quantity = min(20, max(0, (int) $quantity));
                 if ($quantity > 0) $productQuantities[(int) $productId] = $quantity;
             }
@@ -1751,11 +1772,13 @@ try {
         );
         $seatsStmt->execute([$showtimeId, $showtimeId, (int) $showtime['room_id']]);
         $seats = $seatsStmt->fetchAll();
-        $productCategories = db()->query('SELECT * FROM product_categories WHERE active=1 ORDER BY COALESCE(parent_id,id), parent_id IS NOT NULL, sort_order, name')->fetchAll();
-        $products = db()->query('SELECT products.id,products.category_id,products.name,products.price,products.stock_quantity,products.image_data IS NOT NULL has_image,product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY product_categories.sort_order, products.name')->fetchAll();
+        $cinemaSettings = cinema_settings();
+        $adminProductsEnabled = (int) ($cinemaSettings['admin_products_enabled'] ?? 1) === 1;
+        $productCategories = $adminProductsEnabled ? db()->query('SELECT * FROM product_categories WHERE active=1 ORDER BY COALESCE(parent_id,id), parent_id IS NOT NULL, sort_order, name')->fetchAll() : [];
+        $products = $adminProductsEnabled ? db()->query('SELECT products.id,products.category_id,products.name,products.price,products.stock_quantity,products.image_data IS NOT NULL has_image,product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY product_categories.sort_order, products.name')->fetchAll() : [];
         $screen = json_decode($showtime['screen_config'] ?: '{}', true) ?: ['x' => 270, 'y' => 28, 'w' => 500, 'h' => 34];
 
-        layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products) {
+        layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products, $adminProductsEnabled) {
             ?>
             <?php if (!empty($_GET['seat_conflict'])): ?><p class="sale-conflict">Uma poltrona foi vendida em outro terminal. O mapa foi atualizado; selecione outra.</p><?php endif; ?>
             <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>">
@@ -1807,9 +1830,9 @@ try {
                 </footer>
                 <div class="sale-wizard" id="sale-wizard" hidden>
                     <section class="sale-wizard-dialog" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
-                        <header><div><span class="eyebrow">Passo 2 de 2</span><h2 id="wizard-title">Adicionar delícias</h2><p>Escolha produtos ou finalize sem adicionar nada.</p></div><button class="icon-button" type="button" id="close-wizard" title="Voltar às poltronas">×</button></header>
+                        <header><div><span class="eyebrow">Passo 2 de 2</span><h2 id="wizard-title"><?= $adminProductsEnabled ? 'Adicionar delícias' : 'Finalizar venda' ?></h2><p><?= $adminProductsEnabled ? 'Escolha produtos ou finalize sem adicionar nada.' : 'Confira o total e escolha a forma de pagamento.' ?></p></div><button class="icon-button" type="button" id="close-wizard" title="Voltar às poltronas">×</button></header>
                         <div class="product-wizard-layout">
-                            <nav class="product-category-tree" aria-label="Categorias de produtos">
+                            <?php if ($adminProductsEnabled): ?><nav class="product-category-tree" aria-label="Categorias de produtos">
                                 <button type="button" class="active" data-category="all"><i data-lucide="layout-grid"></i><span>Todos</span></button>
                                 <?php foreach ($productCategories as $category): ?>
                                     <button type="button" data-category="<?= (int) $category['id'] ?>" class="<?= $category['parent_id'] ? 'child' : '' ?>"><i data-lucide="<?= e($category['icon']) ?>"></i><span><?= e($category['name']) ?></span></button>
@@ -1824,7 +1847,7 @@ try {
                                     </article>
                                 <?php endforeach; ?>
                                 <?php if (!$products): ?><p class="muted">Nenhum produto disponível. Cadastre produtos para usar esta etapa.</p><?php endif; ?>
-                            </div>
+                            </div><?php else: ?><div class="panel"><p class="muted">Venda de delícias desativada nas configurações do cinema.</p></div><?php endif; ?>
                         </div>
                         <footer>
                             <div class="wizard-total-block"><span>Ingressos + produtos</span><strong id="wizard-total">R$ 0,00</strong></div>
@@ -2111,7 +2134,7 @@ try {
             <?php if($delivered):?><p class="pickup-success"><?=$delivered?> produto(s) entregue(s) com sucesso.</p><?php endif;?>
             <section class="pickup-layout"><div class="panel pickup-scanner"><div class="qr-camera-box"><video id="product-qr-video" playsinline muted></video></div><div class="qr-reader-actions"><button class="button primary" type="button" id="start-product-reader">Abrir câmera</button><button class="button" type="button" id="stop-product-reader" disabled>Parar</button></div><p id="product-reader-status" class="muted">Aguardando leitura.</p><form id="manual-product-form" class="form"><label>Código do produto<input id="manual-product-token" placeholder="Cole ou digite o código"></label><button class="button">Adicionar à lista</button></form></div>
             <form method="post" class="panel pickup-cart" id="pickup-form"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><div class="panel-heading"><div><span class="eyebrow">Conferência</span><h2>Produtos lidos</h2></div><strong id="pickup-count">0</strong></div><div id="pickup-items" class="pickup-items"><p class="muted empty">Nenhum produto lido.</p></div><button class="button primary pickup-finish" id="finish-pickup" disabled>Finalizar entrega</button></form></section>
-            <script src="/assets/js/product-pickup.js"></script>
+            <script>window.cinemaQrBeepEnabled = <?= !empty(cinema_settings()['qr_beep_enabled']) ? 'true' : 'false' ?>;</script><script src="/assets/js/product-pickup.js"></script>
         <?php });exit;
     }
 
@@ -2160,6 +2183,7 @@ try {
                     <button class="button primary">Validar manualmente</button>
                 </form>
             </section>
+            <script>window.cinemaQrBeepEnabled = <?= !empty($cinema['qr_beep_enabled']) ? 'true' : 'false' ?>;</script>
             <script src="/assets/js/qr-reader.js"></script>
             <?php
         });

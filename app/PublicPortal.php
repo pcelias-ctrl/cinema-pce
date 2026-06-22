@@ -119,12 +119,17 @@ final class PublicPortal
 
     public static function cinema(PDO $db): array
     {
-        $defaults = ['cinema_name' => 'Cinema PCE', 'address' => '', 'phone' => '', 'whatsapp' => '', 'email' => '', 'has_logo' => false];
+        $defaults = ['cinema_name' => 'Cinema PCE', 'address' => '', 'phone' => '', 'whatsapp' => '', 'email' => '', 'has_logo' => false, 'public_products_enabled' => 1];
         try {
-            $row = $db->query('SELECT cinema_name,address,phone,whatsapp,email,logo_data IS NOT NULL has_logo FROM cinema_settings WHERE id=1')->fetch();
+            $row = $db->query('SELECT cinema_name,address,phone,whatsapp,email,logo_data IS NOT NULL has_logo,public_products_enabled FROM cinema_settings WHERE id=1')->fetch();
             return array_merge($defaults, $row ?: []);
         } catch (\Throwable $exception) {
-            return $defaults;
+            try {
+                $row = $db->query('SELECT cinema_name,address,phone,whatsapp,email,logo_data IS NOT NULL has_logo FROM cinema_settings WHERE id=1')->fetch();
+                return array_merge($defaults, $row ?: []);
+            } catch (\Throwable $fallbackException) {
+                return $defaults;
+            }
         }
     }
 
