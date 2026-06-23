@@ -494,6 +494,12 @@ function ensure_room_seat_availability_columns(): void
 
     $indexes = db()->query("SHOW INDEX FROM tickets WHERE Key_name = 'uniq_ticket_showtime_seat'")->fetchAll();
     if ($indexes) {
+        if (!db()->query("SHOW INDEX FROM tickets WHERE Key_name = 'idx_tickets_showtime'")->fetch()) {
+            db()->exec('ALTER TABLE tickets ADD INDEX idx_tickets_showtime (showtime_id)');
+        }
+        if (!db()->query("SHOW INDEX FROM tickets WHERE Key_name = 'idx_tickets_room_seat'")->fetch()) {
+            db()->exec('ALTER TABLE tickets ADD INDEX idx_tickets_room_seat (room_seat_id)');
+        }
         db()->exec('ALTER TABLE tickets DROP INDEX uniq_ticket_showtime_seat');
     }
     $statusIndexes = db()->query("SHOW INDEX FROM tickets WHERE Key_name = 'uniq_ticket_showtime_seat_status'")->fetchAll();

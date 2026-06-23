@@ -179,6 +179,8 @@ CREATE TABLE tickets (
     canceled_by INT UNSIGNED NULL,
     cancel_reason TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_tickets_showtime (showtime_id),
+    INDEX idx_tickets_room_seat (room_seat_id),
     INDEX idx_tickets_sale_code (sale_code),
     INDEX idx_tickets_qr_token (qr_token),
     CONSTRAINT fk_tickets_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id),
