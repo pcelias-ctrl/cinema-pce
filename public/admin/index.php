@@ -76,7 +76,7 @@ function layout(string $title, callable $content): void
                                 <li class="nav-item"><a class="nav-link <?= $navClass('public_settings') ?>" href="index.php?route=public_settings"><i></i><p>Venda Online</p></a></li>
                             <?php endif; ?>
                             <li class="nav-header">OPERAÇÃO</li>
-                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print', 'ticket_cancel'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Check-in QR</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['product_pickup', 'product_pickup_lookup'], true) ? 'active' : '' ?>" href="index.php?route=product_pickup"><i></i><p>Retira de Produtos</p></a></li>
@@ -170,6 +170,7 @@ function save_product_image(array $file): ?array
 function rebuild_room_seats(int $roomId, array $seats): void
 {
     $pdo = db();
+    ensure_room_seat_availability_columns();
     $existingStmt = $pdo->prepare('SELECT * FROM room_seats WHERE room_id = ?');
     $existingStmt->execute([$roomId]);
     $existingByCode = [];
@@ -178,11 +179,11 @@ function rebuild_room_seats(int $roomId, array $seats): void
     }
 
     $insert = $pdo->prepare(
-        'INSERT INTO room_seats (room_id, row_label, seat_number, seat_code, seat_type, pos_x, pos_y, width, height)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO room_seats (room_id, row_label, seat_number, seat_code, seat_type, unavailable, pos_x, pos_y, width, height)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     $update = $pdo->prepare(
-        'UPDATE room_seats SET row_label=?, seat_number=?, seat_type=?, pos_x=?, pos_y=?, width=?, height=? WHERE id=? AND room_id=?'
+        'UPDATE room_seats SET row_label=?, seat_number=?, seat_type=?, unavailable=?, pos_x=?, pos_y=?, width=?, height=? WHERE id=? AND room_id=?'
     );
     $submittedCodes = [];
 
@@ -196,15 +197,16 @@ function rebuild_room_seats(int $roomId, array $seats): void
         }
         $submittedCodes[$code] = true;
         $type = ($seat['type'] ?? 'normal') === 'grande' ? 'grande' : 'normal';
+        $unavailable = !empty($seat['unavailable']) ? 1 : 0;
         $values = [
-            $row, $number, $type,
+            $row, $number, $type, $unavailable,
             (float) ($seat['x'] ?? 0), (float) ($seat['y'] ?? 0),
             (float) ($seat['w'] ?? ($type === 'grande' ? 62 : 44)), (float) ($seat['h'] ?? 44),
         ];
         if (isset($existingByCode[$code])) {
             $update->execute(array_merge($values, [(int) $existingByCode[$code]['id'], $roomId]));
         } else {
-            $insert->execute([$roomId, $row, $number, $code, $type, $values[3], $values[4], $values[5], $values[6]]);
+            $insert->execute([$roomId, $row, $number, $code, $type, $unavailable, $values[4], $values[5], $values[6], $values[7]]);
         }
     }
 
@@ -475,6 +477,33 @@ function ensure_ticket_pricing_columns(): void
     $ready = true;
 }
 
+function ensure_room_seat_availability_columns(): void
+{
+    static $ready = false;
+    if ($ready) return;
+
+    $column = db()->query("SHOW COLUMNS FROM room_seats LIKE 'unavailable'")->fetch();
+    if (!$column) {
+        db()->exec('ALTER TABLE room_seats ADD COLUMN unavailable TINYINT(1) NOT NULL DEFAULT 0 AFTER seat_type');
+    }
+
+    $ticketCancelColumn = db()->query("SHOW COLUMNS FROM tickets LIKE 'canceled_at'")->fetch();
+    if (!$ticketCancelColumn) {
+        db()->exec('ALTER TABLE tickets ADD COLUMN canceled_at DATETIME NULL AFTER checked_in_by, ADD COLUMN canceled_by INT UNSIGNED NULL AFTER canceled_at, ADD COLUMN cancel_reason TEXT NULL AFTER canceled_by');
+    }
+
+    $indexes = db()->query("SHOW INDEX FROM tickets WHERE Key_name = 'uniq_ticket_showtime_seat'")->fetchAll();
+    if ($indexes) {
+        db()->exec('ALTER TABLE tickets DROP INDEX uniq_ticket_showtime_seat');
+    }
+    $statusIndexes = db()->query("SHOW INDEX FROM tickets WHERE Key_name = 'uniq_ticket_showtime_seat_status'")->fetchAll();
+    if ($statusIndexes) {
+        db()->exec('ALTER TABLE tickets DROP INDEX uniq_ticket_showtime_seat_status');
+    }
+
+    $ready = true;
+}
+
 function ensure_product_tables(): void
 {
     static $ready = false;
@@ -536,7 +565,7 @@ function cash_totals(int $cashRegisterId): array
         'SELECT payment_method, SUM(items) tickets, SUM(total) total FROM (
             SELECT payment_method, COUNT(*) items, COALESCE(SUM(unit_price),0) total FROM tickets WHERE cash_register_id=? AND status="vendido" GROUP BY payment_method
             UNION ALL
-            SELECT product_sales.payment_method, COUNT(product_sale_items.id) items, product_sales.total_amount total FROM product_sales INNER JOIN product_sale_items ON product_sale_items.product_sale_id=product_sales.id WHERE product_sales.cash_register_id=? GROUP BY product_sales.id, product_sales.payment_method, product_sales.total_amount
+            SELECT product_sales.payment_method, COUNT(product_sale_items.id) items, COALESCE(SUM(product_sale_items.unit_price),0) total FROM product_sales INNER JOIN product_sale_items ON product_sale_items.product_sale_id=product_sales.id WHERE product_sales.cash_register_id=? AND product_sale_items.status<>"cancelado" GROUP BY product_sales.id, product_sales.payment_method
          ) movements GROUP BY payment_method'
     );
     $stmt->execute([$cashRegisterId, $cashRegisterId]);
@@ -618,7 +647,10 @@ try {
     if (in_array($route, ['showtimes', 'showtime_new', 'showtime_edit', 'sales', 'sale_new'], true)) {
         ensure_ticket_pricing_columns();
     }
-    if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'ticket_receipt', 'ticket_print', 'sale_receipt_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
+    if (in_array($route, ['rooms', 'room_new', 'room_edit', 'sales', 'sale_new', 'ticket_receipt', 'ticket_cancel'], true)) {
+        ensure_room_seat_availability_columns();
+    }
+    if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'ticket_receipt', 'ticket_cancel', 'ticket_print', 'sale_receipt_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
         ensure_product_tables();
     }
     if ($route === 'public_settings') PublicPortal::ensureSchema(db());
@@ -739,8 +771,8 @@ try {
             $webhookEncrypted = $webhookPassword !== '' ? SettingCrypto::encrypt($webhookPassword) : ($settings['pagarme_webhook_password_encrypted'] ?: $settings['pagarme_webhook_secret_encrypted']);
             $googleEncrypted = $googleSecret !== '' ? SettingCrypto::encrypt($googleSecret) : $settings['google_client_secret_encrypted'];
             $gateway = in_array(($_POST['payment_gateway'] ?? 'pagarme'),['pagarme','infinitepay','mixed'],true)?$_POST['payment_gateway']:'pagarme';
-            $stmt = db()->prepare('UPDATE public_portal_settings SET sales_enabled=?,hold_minutes=?,payment_gateway=?,pagarme_public_key=?,pagarme_secret_encrypted=?,pagarme_webhook_username=?,pagarme_webhook_password_encrypted=?,infinitepay_handle=?,google_client_id=?,google_client_secret_encrypted=?,privacy_contact_email=?,cookie_policy_version=? WHERE id=1');
-            $stmt->execute([!empty($_POST['sales_enabled'])?1:0,max(5,min(30,(int)($_POST['hold_minutes']??10))),$gateway,trim($_POST['pagarme_public_key']??'')?:null,$pagarmeEncrypted?:null,trim($_POST['pagarme_webhook_username']??'')?:null,$webhookEncrypted?:null,ltrim(trim($_POST['infinitepay_handle']??''),'@')?:null,trim($_POST['google_client_id']??'')?:null,$googleEncrypted?:null,trim($_POST['privacy_contact_email']??'')?:null,trim($_POST['cookie_policy_version']??'1.0')?:'1.0']);
+            $stmt = db()->prepare('UPDATE public_portal_settings SET sales_enabled=?,hold_minutes=?,public_sale_cutoff_minutes=?,payment_gateway=?,pagarme_public_key=?,pagarme_secret_encrypted=?,pagarme_webhook_username=?,pagarme_webhook_password_encrypted=?,infinitepay_handle=?,google_client_id=?,google_client_secret_encrypted=?,privacy_contact_email=?,cookie_policy_version=? WHERE id=1');
+            $stmt->execute([!empty($_POST['sales_enabled'])?1:0,max(5,min(30,(int)($_POST['hold_minutes']??10))),max(0,min(240,(int)($_POST['public_sale_cutoff_minutes']??45))),$gateway,trim($_POST['pagarme_public_key']??'')?:null,$pagarmeEncrypted?:null,trim($_POST['pagarme_webhook_username']??'')?:null,$webhookEncrypted?:null,ltrim(trim($_POST['infinitepay_handle']??''),'@')?:null,trim($_POST['google_client_id']??'')?:null,$googleEncrypted?:null,trim($_POST['privacy_contact_email']??'')?:null,trim($_POST['cookie_policy_version']??'1.0')?:'1.0']);
             $settings = PublicPortal::settings(db());
             $saved = true;
         }
@@ -751,7 +783,7 @@ try {
             <div class="section-head"><div><h1>Venda Online</h1><p class="muted">Portal público, pagamentos e acesso Google.</p></div><a class="button" href="/" target="_blank">Abrir portal</a></div>
             <?php if($saved):?><p class="alert success">Configurações salvas.</p><?php endif;?>
             <form method="post" class="form wide"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
-                <section class="panel"><div class="settings-title"><h2>Portal público</h2><label class="check-label"><input type="checkbox" name="sales_enabled" value="1" <?=$settings['sales_enabled']?'checked':''?>> Ativar pagamentos online</label></div><div class="columns"><label>Processamento dos pagamentos<select name="payment_gateway"><option value="mixed" <?=$settings['payment_gateway']==='mixed'?'selected':''?>>Mesclar: Pix InfinitePay + cartão Pagar.me</option><option value="pagarme" <?=$settings['payment_gateway']==='pagarme'?'selected':''?>>Somente Pagar.me</option><option value="infinitepay" <?=$settings['payment_gateway']==='infinitepay'?'selected':''?>>Somente InfinitePay</option></select></label><label>Reserva das poltronas (minutos)<input name="hold_minutes" type="number" min="5" max="30" value="<?=e($settings['hold_minutes'])?>"></label><label>E-mail para privacidade<input name="privacy_contact_email" type="email" value="<?=e($settings['privacy_contact_email'])?>"></label><label>Versão da política de cookies<input name="cookie_policy_version" value="<?=e($settings['cookie_policy_version'])?>"></label></div></section>
+                <section class="panel"><div class="settings-title"><h2>Portal público</h2><label class="check-label"><input type="checkbox" name="sales_enabled" value="1" <?=$settings['sales_enabled']?'checked':''?>> Ativar pagamentos online</label></div><div class="columns"><label>Processamento dos pagamentos<select name="payment_gateway"><option value="mixed" <?=$settings['payment_gateway']==='mixed'?'selected':''?>>Mesclar: Pix InfinitePay + cartão Pagar.me</option><option value="pagarme" <?=$settings['payment_gateway']==='pagarme'?'selected':''?>>Somente Pagar.me</option><option value="infinitepay" <?=$settings['payment_gateway']==='infinitepay'?'selected':''?>>Somente InfinitePay</option></select></label><label>Reserva das poltronas (minutos)<input name="hold_minutes" type="number" min="5" max="30" value="<?=e($settings['hold_minutes'])?>"></label><label>Bloquear venda pública antes da sessão (minutos)<input name="public_sale_cutoff_minutes" type="number" min="0" max="240" value="<?=e($settings['public_sale_cutoff_minutes'] ?? 45)?>"><small>Exemplo: 45 bloqueia compras online faltando 45 minutos.</small></label><label>E-mail para privacidade<input name="privacy_contact_email" type="email" value="<?=e($settings['privacy_contact_email'])?>"></label><label>Versão da política de cookies<input name="cookie_policy_version" value="<?=e($settings['cookie_policy_version'])?>"></label></div></section>
                 <section class="panel"><div class="settings-title"><h2>Pagar.me</h2><span class="status-badge <?=($settings['pagarme_public_key']&&$settings['pagarme_secret_encrypted'])?'active':'inactive'?>"><?=($settings['pagarme_public_key']&&$settings['pagarme_secret_encrypted'])?'Configurado':'Pendente'?></span></div><?php if(str_starts_with((string)$settings['pagarme_public_key'],'pk_test_')):?><p class="alert warning"><strong>Ambiente de testes:</strong> cartões e Pix são simulados e não geram recebimentos reais. Para operar a loja, informe as chaves <code>pk_live</code> e <code>sk_live</code>.</p><?php endif;?><div class="columns"><label>Chave pública<input name="pagarme_public_key" value="<?=e($settings['pagarme_public_key'])?>" autocomplete="off"></label><label>Chave secreta<input name="pagarme_secret" type="password" autocomplete="new-password" placeholder="<?=$settings['pagarme_secret_encrypted']?'Configurada; deixe vazio para manter':''?>"></label><label>Usuário do webhook<input name="pagarme_webhook_username" value="<?=e($settings['pagarme_webhook_username'])?>" autocomplete="off"></label><label>Senha do webhook<input name="pagarme_webhook_password" type="password" autocomplete="new-password" placeholder="<?=$settings['pagarme_webhook_password_encrypted']?'Configurada; deixe vazio para manter':''?>"></label></div><p class="muted"><strong>URL do webhook:</strong> <?=e($webhookUrl)?><br>Cadastre esta URL, o usuário e a mesma senha no portal Pagar.me.</p></section>
                 <section class="panel"><div class="settings-title"><h2>InfinitePay</h2><span class="status-badge <?=$settings['infinitepay_handle']?'active':'inactive'?>"><?=$settings['infinitepay_handle']?'Configurado':'Pendente'?></span></div><div class="columns"><label>Handle / InfiniteTag<input name="infinitepay_handle" value="<?=e($settings['infinitepay_handle'])?>" autocomplete="off" placeholder="seu-handle"></label></div><p class="muted"><strong>Webhook automático:</strong> <?=e($infiniteWebhookUrl)?></p></section>
                 <section class="panel"><div class="settings-title"><h2>Google</h2><span class="status-badge <?=($settings['google_client_id']&&$settings['google_client_secret_encrypted'])?'active':'inactive'?>"><?=($settings['google_client_id']&&$settings['google_client_secret_encrypted'])?'Configurado':'Pendente'?></span></div><div class="columns"><label>Client ID<input name="google_client_id" value="<?=e($settings['google_client_id'])?>" autocomplete="off"></label><label>Client secret<input name="google_client_secret" type="password" autocomplete="new-password" placeholder="<?=$settings['google_client_secret_encrypted']?'Configurado; deixe vazio para manter':''?>"></label></div><p class="muted"><strong>URI de redirecionamento:</strong> <?=e(rtrim((string)config_value('app_url'),'/'))?>/?action=google_callback</p></section>
@@ -1517,11 +1549,11 @@ try {
                 WHERE cash_register_id = ? AND status = "vendido"
                 GROUP BY sale_code, payment_method
                 UNION ALL
-                SELECT product_sales.sale_code, product_sales.sold_at, product_sales.payment_method, COUNT(product_sale_items.id) items, product_sales.total_amount, "Produtos" movement_type
+                SELECT product_sales.sale_code, product_sales.sold_at, product_sales.payment_method, COUNT(product_sale_items.id) items, COALESCE(SUM(product_sale_items.unit_price),0) total_amount, "Produtos" movement_type
                 FROM product_sales
                 INNER JOIN product_sale_items ON product_sale_items.product_sale_id = product_sales.id
-                WHERE product_sales.cash_register_id = ?
-                GROUP BY product_sales.id, product_sales.sale_code, product_sales.sold_at, product_sales.payment_method, product_sales.total_amount
+                WHERE product_sales.cash_register_id = ? AND product_sale_items.status <> "cancelado"
+                GROUP BY product_sales.id, product_sales.sale_code, product_sales.sold_at, product_sales.payment_method
              ) cash_movements
              ORDER BY sold_at ASC, movement_type ASC'
         );
@@ -1568,10 +1600,10 @@ try {
              FROM showtimes
              INNER JOIN movies ON movies.id = showtimes.movie_id
              INNER JOIN rooms ON rooms.id = showtimes.room_id
-             WHERE DATE(showtimes.starts_at) = ? AND showtimes.status = "programada" AND showtimes.starts_at > ?
+             WHERE DATE(showtimes.starts_at) = ? AND showtimes.status = "programada"
              ORDER BY showtimes.starts_at ASC, movies.title ASC'
         );
-        $stmt->execute([$date, $nowLocal]);
+        $stmt->execute([$date]);
         $showtimes = $stmt->fetchAll();
 
         layout('Venda', function () use ($date, $showtimes, $cash) {
@@ -1621,9 +1653,9 @@ try {
              FROM showtimes
              INNER JOIN movies ON movies.id = showtimes.movie_id
              INNER JOIN rooms ON rooms.id = showtimes.room_id
-             WHERE showtimes.id = ? AND showtimes.status = "programada" AND showtimes.starts_at > ?'
+             WHERE showtimes.id = ? AND showtimes.status = "programada"'
         );
-        $stmt->execute([$showtimeId, (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s')]);
+        $stmt->execute([$showtimeId]);
         $showtime = $stmt->fetch();
         if (!$showtime) {
             throw new RuntimeException('Sessão não encontrada ou indisponível para venda.');
@@ -1679,8 +1711,10 @@ try {
                     AND public_seat_holds.expires_at > NOW()
                  WHERE room_seats.id IN ($placeholders)
                     AND room_seats.room_id = ?
+                    AND room_seats.unavailable = 0
                     AND tickets.id IS NULL
-                    AND public_seat_holds.id IS NULL"
+                    AND public_seat_holds.id IS NULL
+                 FOR UPDATE"
             );
             array_splice($params, 1, 0, [$showtimeId]);
             $params[] = (int) $showtime['room_id'];
@@ -1788,11 +1822,11 @@ try {
                     <div class="sale-map" aria-label="Mapa de poltronas">
                         <div class="sale-screen" style="left:<?= e(((float) ($screen['x'] ?? 270) / 1040) * 100) ?>%;top:<?= e(((float) ($screen['y'] ?? 28) / 620) * 100) ?>%;width:<?= e(((float) ($screen['w'] ?? 500) / 1040) * 100) ?>%;height:<?= e(((float) ($screen['h'] ?? 34) / 620) * 100) ?>%;">TELA</div>
                         <?php foreach ($seats as $seat): ?>
-                            <?php $sold = !empty($seat['sold_ticket_id']) || !empty($seat['held_seat_id']); ?>
-                            <label class="sale-seat <?= $seat['seat_type'] === 'grande' ? 'large' : '' ?> <?= $sold ? 'sold' : '' ?>"
+                            <?php $unavailable = !empty($seat['unavailable']); $sold = !$unavailable && (!empty($seat['sold_ticket_id']) || !empty($seat['held_seat_id'])); ?>
+                            <label class="sale-seat <?= $seat['seat_type'] === 'grande' ? 'large' : '' ?> <?= $sold ? 'sold' : '' ?> <?= $unavailable ? 'unavailable' : '' ?>"
                                 style="left:<?= e(((float) $seat['pos_x'] / 1040) * 100) ?>%;top:<?= e(((float) $seat['pos_y'] / 620) * 100) ?>%;width:<?= e(((float) $seat['width'] / 1040) * 100) ?>%;height:<?= e(((float) $seat['height'] / 620) * 100) ?>%;"
                                 title="<?= e($seat['seat_code']) ?>">
-                                <input type="checkbox" name="seat_ids[]" value="<?= (int) $seat['id'] ?>" <?= $sold ? 'disabled' : '' ?>>
+                                <input type="checkbox" name="seat_ids[]" value="<?= (int) $seat['id'] ?>" <?= ($sold || $unavailable) ? 'disabled' : '' ?>>
                                 <span><?= e($seat['seat_code']) ?></span>
                                 <input class="seat-ticket-type" type="hidden" name="seat_types[<?= (int) $seat['id'] ?>]" value="inteira" disabled>
                             </label>
@@ -1889,6 +1923,7 @@ try {
                     <a class="button" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir ingressos separados</a>
                     <?php if ($productCount): ?><a class="button" href="index.php?route=product_receipt&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir produtos (<?= $productCount ?>)</a><?php endif; ?>
                     <a class="button primary" href="index.php?route=sale_new&showtime_id=<?= (int) $first['showtime_id'] ?>">Nova venda nesta sessão</a>
+                    <a class="button danger" href="index.php?route=ticket_cancel&sale_code=<?= e(urlencode($first['sale_code'])) ?>">Cancelar venda</a>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
             </div>
@@ -1919,6 +1954,102 @@ try {
                     if (popup) popup.focus();
                 })();
             </script>
+            <?php
+        });
+        exit;
+    }
+
+    if ($route === 'ticket_cancel') {
+        Auth::requireLogin();
+        $saleCode = trim($_GET['sale_code'] ?? $_POST['sale_code'] ?? '');
+        $reason = trim($_POST['reason'] ?? '');
+        $canceled = false;
+        $tickets = [];
+        $products = [];
+        if ($saleCode !== '') {
+            $stmt = db()->prepare(
+                'SELECT tickets.*, room_seats.seat_code, movies.title movie_title, rooms.name room_name, showtimes.starts_at
+                 FROM tickets
+                 INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
+                 INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
+                 INNER JOIN movies ON movies.id = showtimes.movie_id
+                 INNER JOIN rooms ON rooms.id = showtimes.room_id
+                 WHERE tickets.sale_code = ?
+                 ORDER BY room_seats.row_label, room_seats.seat_number'
+            );
+            $stmt->execute([$saleCode]);
+            $tickets = $stmt->fetchAll();
+            $productStmt = db()->prepare('SELECT product_sale_items.*, products.name product_name FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id WHERE product_sales.sale_code=? ORDER BY products.name, product_sale_items.id');
+            $productStmt->execute([$saleCode]);
+            $products = $productStmt->fetchAll();
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            if ($saleCode === '') throw new RuntimeException('Informe o código da venda.');
+            db()->beginTransaction();
+            try {
+                $lock = db()->prepare('SELECT id, status FROM tickets WHERE sale_code=? FOR UPDATE');
+                $lock->execute([$saleCode]);
+                $lockedTickets = $lock->fetchAll();
+                if (!$lockedTickets) throw new RuntimeException('Venda não encontrada.');
+                $soldCount = count(array_filter($lockedTickets, static fn($ticket) => $ticket['status'] === 'vendido'));
+                if ($soldCount < 1) throw new RuntimeException('Esta venda já está cancelada.');
+
+                $stockStmt = db()->prepare("SELECT products.id product_id, COUNT(*) quantity FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id WHERE product_sales.sale_code=? AND product_sale_items.status<>'cancelado' AND products.stock_quantity IS NOT NULL GROUP BY products.id");
+                $stockStmt->execute([$saleCode]);
+                $stockRows = $stockStmt->fetchAll();
+
+                $cancelTickets = db()->prepare("UPDATE tickets SET status='cancelado', canceled_at=NOW(), canceled_by=?, cancel_reason=? WHERE sale_code=? AND status='vendido'");
+                $cancelTickets->execute([(int) Auth::user()['id'], $reason ?: null, $saleCode]);
+
+                $cancelProducts = db()->prepare("UPDATE product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id SET product_sale_items.status='cancelado' WHERE product_sales.sale_code=? AND product_sale_items.status<>'cancelado'");
+                $cancelProducts->execute([$saleCode]);
+
+                $restoreStock = db()->prepare('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ? AND stock_quantity IS NOT NULL');
+                foreach ($stockRows as $row) $restoreStock->execute([(int) $row['quantity'], (int) $row['product_id']]);
+
+                db()->prepare("UPDATE public_orders SET status='estornado' WHERE order_code=? AND status='pago'")->execute([$saleCode]);
+                db()->prepare("UPDATE public_order_products INNER JOIN public_orders ON public_orders.id=public_order_products.order_id SET public_order_products.status='cancelado' WHERE public_orders.order_code=? AND public_order_products.status<>'cancelado'")->execute([$saleCode]);
+                db()->commit();
+                header('Location: index.php?route=ticket_cancel&sale_code=' . urlencode($saleCode) . '&canceled=1');
+                exit;
+            } catch (Throwable $exception) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $exception;
+            }
+        }
+
+        $canceled = !empty($_GET['canceled']);
+        layout('Cancelamento de Venda', function () use ($saleCode, $tickets, $products, $canceled) {
+            $soldTickets = array_filter($tickets, static fn($ticket) => $ticket['status'] === 'vendido');
+            ?>
+            <div class="section-head"><div><h1>Cancelamento de venda</h1><p class="muted">Cancela ingressos, libera poltronas e remove a venda dos totais do caixa.</p></div></div>
+            <?php if ($canceled): ?><p class="alert success">Venda cancelada. As poltronas foram liberadas para venda.</p><?php endif; ?>
+            <form method="get" class="panel form filters">
+                <input type="hidden" name="route" value="ticket_cancel">
+                <div class="columns compact"><label>Código da venda<input name="sale_code" value="<?= e($saleCode) ?>" placeholder="Ex: V2026..."></label></div>
+                <button class="button primary">Localizar venda</button>
+            </form>
+            <?php if ($saleCode !== '' && !$tickets): ?><p class="alert">Venda não encontrada.</p><?php endif; ?>
+            <?php if ($tickets): ?>
+                <section class="panel">
+                    <h2><?= e($tickets[0]['movie_title']) ?></h2>
+                    <p><strong>Sala:</strong> <?= e($tickets[0]['room_name']) ?> | <strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($tickets[0]['starts_at']))) ?></p>
+                    <table><thead><tr><th>Poltrona</th><th>Tipo</th><th>Valor</th><th>Status</th></tr></thead><tbody>
+                        <?php foreach ($tickets as $ticket): ?><tr><td><?= e($ticket['seat_code']) ?></td><td><?= e(ucfirst($ticket['ticket_type'])) ?></td><td>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></td><td><span class="status-badge <?= $ticket['status'] === 'vendido' ? 'active' : 'inactive' ?>"><?= e(ucfirst($ticket['status'])) ?></span></td></tr><?php endforeach; ?>
+                    </tbody></table>
+                    <?php if ($products): ?><h2>Produtos vinculados</h2><p class="muted"><?= count($products) ?> produto(s) serão cancelados junto com a venda.</p><?php endif; ?>
+                    <?php if ($soldTickets): ?>
+                        <form method="post" class="form" onsubmit="return confirm('Confirmar cancelamento desta venda? As poltronas voltarão para venda.')">
+                            <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                            <input type="hidden" name="sale_code" value="<?= e($saleCode) ?>">
+                            <label>Motivo do cancelamento<textarea name="reason" rows="3" placeholder="Opcional"></textarea></label>
+                            <button class="button danger">Cancelar venda e liberar poltronas</button>
+                        </form>
+                    <?php else: ?><p class="alert">Esta venda já está cancelada.</p><?php endif; ?>
+                </section>
+            <?php endif; ?>
             <?php
         });
         exit;
@@ -2314,6 +2445,25 @@ try {
             $stmt = db()->prepare('SELECT * FROM rooms WHERE id = ?');
             $stmt->execute([(int) $_GET['id']]);
             $room = $stmt->fetch() ?: $room;
+            $seatsStmt = db()->prepare('SELECT row_label, seat_number, seat_type, unavailable, pos_x, pos_y, width, height FROM room_seats WHERE room_id = ? ORDER BY row_label, seat_number');
+            $seatsStmt->execute([(int) $_GET['id']]);
+            $storedSeats = [];
+            foreach ($seatsStmt->fetchAll() as $seat) {
+                $storedSeats[] = [
+                    'id' => $seat['row_label'] . '-' . $seat['seat_number'],
+                    'row' => $seat['row_label'],
+                    'number' => (int) $seat['seat_number'],
+                    'type' => $seat['seat_type'],
+                    'unavailable' => !empty($seat['unavailable']),
+                    'x' => (float) $seat['pos_x'],
+                    'y' => (float) $seat['pos_y'],
+                    'w' => (float) $seat['width'],
+                    'h' => (float) $seat['height'],
+                ];
+            }
+            if ($storedSeats) {
+                $room['seat_layout'] = json_encode($storedSeats, JSON_UNESCAPED_UNICODE);
+            }
         }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -2362,6 +2512,7 @@ try {
                 <div class="toolbar">
                     <button type="button" class="button" id="generate-layout">Gerar poltronas</button>
                     <button type="button" class="button" id="add-large-seat">Marcar grande</button>
+                    <button type="button" class="button" id="toggle-unavailable-seat">Inutilizar / liberar</button>
                     <button type="button" class="button" id="fit-screen">Ajustar tela</button>
                     <button type="button" class="button danger" id="clear-layout">Limpar sala</button>
                     <span id="seat-summary"></span>

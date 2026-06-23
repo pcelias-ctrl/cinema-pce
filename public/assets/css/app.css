@@ -613,6 +613,8 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .sale-seat.selected-half span::after { content: "M"; }
 .sale-seat.sold { cursor: not-allowed; }
 .sale-seat.sold span { background: #dc2626; color: #fff1f1; box-shadow: none; }
+.sale-seat.unavailable { cursor: not-allowed; }
+.sale-seat.unavailable span { background: #8b949e; color: #f8fafc; box-shadow: none; }
 .legend {
     display: flex;
     gap: 14px;
@@ -899,6 +901,7 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
     box-shadow: 0 8px 16px rgba(21, 128, 61, .24);
 }
 .seat.large { width: 62px; background: #0f766e; box-shadow: 0 8px 16px rgba(15, 118, 110, .25); }
+.seat.unavailable { background: #8b949e; color: #f8fafc; box-shadow: none; }
 .seat.selected { outline: 3px solid #f5c542; z-index: 4; }
 @keyframes panel-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes meter-grow { from { width: 0; } }

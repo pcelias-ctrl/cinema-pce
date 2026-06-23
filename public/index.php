@@ -63,6 +63,12 @@ function public_now_local(): string
     return (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s');
 }
 
+function public_sale_cutoff_at(array $settings): string
+{
+    $minutes = max(0, min(240, (int) ($settings['public_sale_cutoff_minutes'] ?? 45)));
+    return (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->modify('+' . $minutes . ' minutes')->format('Y-m-d H:i:s');
+}
+
 function confirm_infinitepay_order(PDO $db, array $settings, array $order, array $payload): bool
 {
     $verified=InfinitePay::verifyPayment($settings,$payload);
@@ -271,12 +277,12 @@ if ($action === 'hold' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $db->beginTransaction();
     try {
         $showtimeStmt = $db->prepare("SELECT showtimes.*,rooms.id room_id FROM showtimes INNER JOIN rooms ON rooms.id=showtimes.room_id WHERE showtimes.id=? AND showtimes.status='programada' AND showtimes.starts_at>? FOR UPDATE");
-        $showtimeStmt->execute([$showtimeId, public_now_local()]);
+        $showtimeStmt->execute([$showtimeId, public_sale_cutoff_at($portalSettings)]);
         $showtime = $showtimeStmt->fetch();
         if (!$showtime) throw new RuntimeException('Sessão indisponível.');
         $db->prepare("DELETE public_seat_holds FROM public_seat_holds INNER JOIN public_orders ON public_orders.id=public_seat_holds.order_id WHERE public_seat_holds.expires_at<=NOW() AND public_orders.status IN ('rascunho','aguardando_pagamento','expirado','cancelado')")->execute();
         $placeholders = implode(',', array_fill(0, count($seatIds), '?'));
-        $seatStmt = $db->prepare("SELECT room_seats.id FROM room_seats LEFT JOIN tickets ON tickets.room_seat_id=room_seats.id AND tickets.showtime_id=? AND tickets.status IN ('reservado','vendido') LEFT JOIN public_seat_holds ON public_seat_holds.room_seat_id=room_seats.id AND public_seat_holds.showtime_id=? AND public_seat_holds.expires_at>NOW() WHERE room_seats.room_id=? AND room_seats.id IN ($placeholders) AND tickets.id IS NULL AND public_seat_holds.id IS NULL FOR UPDATE");
+        $seatStmt = $db->prepare("SELECT room_seats.id FROM room_seats LEFT JOIN tickets ON tickets.room_seat_id=room_seats.id AND tickets.showtime_id=? AND tickets.status IN ('reservado','vendido') LEFT JOIN public_seat_holds ON public_seat_holds.room_seat_id=room_seats.id AND public_seat_holds.showtime_id=? AND public_seat_holds.expires_at>NOW() WHERE room_seats.room_id=? AND room_seats.id IN ($placeholders) AND room_seats.unavailable=0 AND tickets.id IS NULL AND public_seat_holds.id IS NULL FOR UPDATE");
         $seatStmt->execute(array_merge([$showtimeId,$showtimeId,(int)$showtime['room_id']],$seatIds));
         $available = array_map('intval', array_column($seatStmt->fetchAll(), 'id'));
         if (count($available) !== count($seatIds)) throw new RuntimeException('Uma das poltronas acabou de ser escolhida por outro cliente.');
@@ -404,6 +410,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $timezone = new DateTimeZone('America/Sao_Paulo');
 $today = new DateTimeImmutable('today', $timezone);
 $nowLocal = public_now_local();
+$publicSaleCutoffAt = public_sale_cutoff_at($portalSettings);
 $selectedDate = $_GET['date'] ?? $today->format('Y-m-d');
 $parsedDate = DateTimeImmutable::createFromFormat('!Y-m-d', $selectedDate, $timezone);
 if (!$parsedDate) { $parsedDate = $today; $selectedDate = $today->format('Y-m-d'); }
@@ -420,13 +427,13 @@ if ($action === 'catalog') {
     $stmt = $db->prepare("SELECT showtimes.id,showtimes.starts_at,showtimes.audio_type,showtimes.is_3d,showtimes.price,showtimes.half_price,
         movies.id movie_id,movies.title,movies.genre,movies.duration_minutes,movies.synopsis,movies.age_rating,movies.cover_data IS NOT NULL has_cover,
         rooms.name room_name,
-        (SELECT COUNT(*) FROM room_seats WHERE room_id=rooms.id) capacity,
+        (SELECT COUNT(*) FROM room_seats WHERE room_id=rooms.id AND unavailable=0) capacity,
         (SELECT COUNT(*) FROM tickets WHERE showtime_id=showtimes.id AND status IN ('reservado','vendido')) sold,
         (SELECT COUNT(*) FROM public_seat_holds WHERE showtime_id=showtimes.id AND expires_at>NOW()) held
         FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id
         WHERE showtimes.status='programada' AND movies.active=1 AND rooms.active=1 AND DATE(showtimes.starts_at)=?
         AND showtimes.starts_at>? ORDER BY movies.title,showtimes.starts_at");
-    $stmt->execute([$selectedDate, $nowLocal]);
+    $stmt->execute([$selectedDate, $publicSaleCutoffAt]);
     foreach ($stmt->fetchAll() as $session) {
         $movieId = (int) $session['movie_id'];
         if (!isset($movies[$movieId])) $movies[$movieId] = ['info' => $session, 'sessions' => []];
@@ -434,7 +441,7 @@ if ($action === 'catalog') {
     }
 } elseif ($action === 'seats') {
     $stmt = $db->prepare("SELECT showtimes.*,movies.id movie_id,movies.title,movies.age_rating,movies.cover_data IS NOT NULL has_cover,rooms.id room_id,rooms.name room_name,rooms.screen_config FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id WHERE showtimes.id=? AND showtimes.status='programada' AND showtimes.starts_at>?");
-    $stmt->execute([(int)($_GET['showtime_id']??0), $nowLocal]);
+    $stmt->execute([(int)($_GET['showtime_id']??0), $publicSaleCutoffAt]);
     $session = $stmt->fetch();
     if ($session) {
         $seatsStmt = $db->prepare("SELECT room_seats.*,tickets.id sold_ticket_id,public_seat_holds.id held_id FROM room_seats LEFT JOIN tickets ON tickets.room_seat_id=room_seats.id AND tickets.showtime_id=? AND tickets.status IN ('reservado','vendido') LEFT JOIN public_seat_holds ON public_seat_holds.room_seat_id=room_seats.id AND public_seat_holds.showtime_id=? AND public_seat_holds.expires_at>NOW() WHERE room_seats.room_id=? ORDER BY room_seats.row_label,room_seats.seat_number");
@@ -471,7 +478,7 @@ public_layout($action === 'catalog' ? 'Ingressos' : 'Minha conta', $cinema, $cus
     if ($action === 'seats') { if(!$seatContext){?><section class="empty-state"><strong>Sessão indisponível</strong><a class="portal-button primary" href="/">Voltar à programação</a></section><?php return;} $session=$seatContext['session'];$screen=$seatContext['screen'];?>
         <div class="page-heading session-heading"><div><a class="back-link" href="/?date=<?=e(date('Y-m-d',strtotime($session['starts_at'])))?>">← Voltar</a><span class="eyebrow">Escolha suas poltronas</span><div class="movie-title-line"><h1><?=e($session['title'])?></h1><?=public_age_badge($session['age_rating'])?></div><p><?=e($session['room_name'])?> · <?=e(date('d/m/Y H:i',strtotime($session['starts_at'])))?> · <?=e(ucfirst($session['audio_type']))?> · <?=$session['is_3d']?'3D':'2D'?> · Classificação <?=e(public_age_rating_label($session['age_rating']))?></p></div></div>
         <?php if(($_GET['error']??'')==='conflict'):?><p class="portal-notice error">Uma poltrona foi escolhida em outro terminal. O mapa foi atualizado.</p><?php elseif(($_GET['error']??'')==='no_seats'):?><p class="portal-notice error">Selecione pelo menos uma poltrona.</p><?php endif;?>
-        <form method="post" action="/?action=hold" class="public-seat-layout" id="public-seat-form" data-full-price="<?=e($session['price'])?>" data-half-price="<?=e($session['half_price']??$session['price']/2)?>"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="showtime_id" value="<?=(int)$session['id']?>"><section class="public-seat-map"><div class="public-screen" style="left:<?=e(((float)($screen['x']??270)/1040)*100)?>%;top:<?=e(((float)($screen['y']??28)/620)*100)?>%;width:<?=e(((float)($screen['w']??500)/1040)*100)?>%;height:<?=e(((float)($screen['h']??34)/620)*100)?>%;">TELA</div><?php foreach($seatContext['seats'] as $seat):$blocked=!empty($seat['sold_ticket_id'])||!empty($seat['held_id']);?><label class="public-seat <?=$seat['seat_type']==='grande'?'large':''?> <?=$blocked?'blocked':''?>" style="left:<?=e(((float)$seat['pos_x']/1040)*100)?>%;top:<?=e(((float)$seat['pos_y']/620)*100)?>%;width:<?=e(((float)$seat['width']/1040)*100)?>%;height:<?=e(((float)$seat['height']/620)*100)?>%;"><input type="checkbox" name="seat_ids[]" value="<?=(int)$seat['id']?>" data-code="<?=e($seat['seat_code'])?>" <?=$blocked?'disabled':''?>><span><?=e($seat['seat_code'])?></span></label><?php endforeach;?></section><aside class="seat-cart"><h2>Minha seleção</h2><div class="seat-legend"><span><i></i>Livre</span><span><i></i>Selecionada</span><span><i></i>Indisponível</span></div><div id="public-selected-seats" class="selected-seat-list"><p>Nenhuma poltrona selecionada.</p></div><div class="seat-cart-total"><span>Total</span><strong id="public-seat-total">R$ 0,00</strong></div><button class="portal-button primary" id="public-seat-continue" disabled>Continuar compra</button></aside></form>
+        <form method="post" action="/?action=hold" class="public-seat-layout" id="public-seat-form" data-full-price="<?=e($session['price'])?>" data-half-price="<?=e($session['half_price']??$session['price']/2)?>"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="showtime_id" value="<?=(int)$session['id']?>"><section class="public-seat-map"><div class="public-screen" style="left:<?=e(((float)($screen['x']??270)/1040)*100)?>%;top:<?=e(((float)($screen['y']??28)/620)*100)?>%;width:<?=e(((float)($screen['w']??500)/1040)*100)?>%;height:<?=e(((float)($screen['h']??34)/620)*100)?>%;">TELA</div><?php foreach($seatContext['seats'] as $seat):$unavailable=!empty($seat['unavailable']);$blocked=$unavailable||!empty($seat['sold_ticket_id'])||!empty($seat['held_id']);?><label class="public-seat <?=$seat['seat_type']==='grande'?'large':''?> <?=$blocked?'blocked':''?> <?=$unavailable?'unavailable':''?>" style="left:<?=e(((float)$seat['pos_x']/1040)*100)?>%;top:<?=e(((float)$seat['pos_y']/620)*100)?>%;width:<?=e(((float)$seat['width']/1040)*100)?>%;height:<?=e(((float)$seat['height']/620)*100)?>%;"><input type="checkbox" name="seat_ids[]" value="<?=(int)$seat['id']?>" data-code="<?=e($seat['seat_code'])?>" <?=$blocked?'disabled':''?>><span><?=e($seat['seat_code'])?></span></label><?php endforeach;?></section><aside class="seat-cart"><h2>Minha seleção</h2><div class="seat-legend"><span><i></i>Livre</span><span><i></i>Selecionada</span><span><i></i>Indisponível</span></div><div id="public-selected-seats" class="selected-seat-list"><p>Nenhuma poltrona selecionada.</p></div><div class="seat-cart-total"><span>Total</span><strong id="public-seat-total">R$ 0,00</strong></div><button class="portal-button primary" id="public-seat-continue" disabled>Continuar compra</button></aside></form>
     <?php } elseif ($action === 'checkout') { if(!$orderContext){?><section class="empty-state"><strong>Reserva indisponível</strong><p>Escolha as poltronas novamente.</p><a class="portal-button primary" href="/">Ver sessões</a></section><?php return;}?>
         <div class="page-heading"><div><span class="eyebrow">Finalizar compra</span><div class="movie-title-line"><h1><?=e($orderContext['title'])?></h1><?=public_age_badge($orderContext['age_rating'])?></div><p><?=e($orderContext['room_name'])?> · <?=e(date('d/m/Y H:i',strtotime($orderContext['starts_at'])))?> · <?=e(ucfirst($orderContext['audio_type']))?> · <?=$orderContext['is_3d']?'3D':'2D'?> · Classificação <?=e(public_age_rating_label($orderContext['age_rating']))?></p></div><div class="hold-timer" data-expires-epoch="<?=(int)$orderContext['expires_epoch']?>"><span>Tempo da reserva</span><strong>10:00</strong></div></div>
         <?php $pagarmeReady=!empty($portalSettings['pagarme_public_key'])&&!empty($portalSettings['pagarme_secret_encrypted']);$infiniteReady=!empty($portalSettings['infinitepay_handle']);$gateway=in_array($portalSettings['payment_gateway'],['pagarme','infinitepay','mixed'],true)?$portalSettings['payment_gateway']:'pagarme';$gatewayReady=$gateway==='mixed'?($pagarmeReady&&$infiniteReady):($gateway==='pagarme'?$pagarmeReady:$infiniteReady);?>

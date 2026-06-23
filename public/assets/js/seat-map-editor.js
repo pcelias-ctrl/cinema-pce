@@ -31,7 +31,8 @@
             h: parseFloat(screen.style.height || 34)
         });
         const large = seats.filter((seat) => seat.type === 'grande').length;
-        summary.textContent = `${seats.length} poltronas | ${seats.length - large} normais | ${large} grandes`;
+        const unavailable = seats.filter((seat) => seat.unavailable).length;
+        summary.textContent = `${seats.length} poltronas | ${seats.length - large} normais | ${large} grandes | ${unavailable} inutilizadas`;
     }
 
     function makeDraggable(element, onMove) {
@@ -65,12 +66,17 @@
         seats.forEach((seat) => {
             const node = document.createElement('button');
             node.type = 'button';
-            node.className = `seat ${seat.type === 'grande' ? 'large' : ''} ${seat.id === selectedSeatId ? 'selected' : ''}`;
+            node.className = `seat ${seat.type === 'grande' ? 'large' : ''} ${seat.unavailable ? 'unavailable' : ''} ${seat.id === selectedSeatId ? 'selected' : ''}`;
             node.textContent = `${seat.row}${seat.number}`;
             node.style.left = `${seat.x}px`;
             node.style.top = `${seat.y}px`;
             node.dataset.id = seat.id;
             node.addEventListener('click', () => {
+                selectedSeatId = seat.id;
+                render();
+            });
+            node.addEventListener('dblclick', () => {
+                seat.unavailable = !seat.unavailable;
                 selectedSeatId = seat.id;
                 render();
             });
@@ -134,6 +140,7 @@
                     row,
                     number,
                     type: count >= total - largeTarget ? 'grande' : 'normal',
+                    unavailable: false,
                     x: 72 + (number - 1) * 48 + aisleOffset,
                     y: 110 + rowIndex * 58,
                     w: count >= total - largeTarget ? 62 : 44,
@@ -153,6 +160,13 @@
         if (!seat) return;
         seat.type = seat.type === 'grande' ? 'normal' : 'grande';
         seat.w = seat.type === 'grande' ? 62 : 44;
+        render();
+    });
+
+    document.getElementById('toggle-unavailable-seat').addEventListener('click', () => {
+        const seat = seats.find((item) => item.id === selectedSeatId);
+        if (!seat) return;
+        seat.unavailable = !seat.unavailable;
         render();
     });
 

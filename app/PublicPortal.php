@@ -16,6 +16,7 @@ final class PublicPortal
         $db->exec("CREATE TABLE IF NOT EXISTS public_portal_settings (
             id TINYINT UNSIGNED PRIMARY KEY DEFAULT 1, sales_enabled TINYINT(1) NOT NULL DEFAULT 0,
             hold_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 10,
+            public_sale_cutoff_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 45,
             payment_gateway ENUM('pagarme','infinitepay','mixed') NOT NULL DEFAULT 'pagarme',
             pagarme_public_key VARCHAR(190) NULL, pagarme_secret_encrypted TEXT NULL, pagarme_webhook_secret_encrypted TEXT NULL,
             pagarme_webhook_username VARCHAR(190) NULL, pagarme_webhook_password_encrypted TEXT NULL,
@@ -64,6 +65,7 @@ final class PublicPortal
 
         self::ensureColumns($db, 'public_portal_settings', [
             'payment_gateway' => "ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme' AFTER hold_minutes",
+            'public_sale_cutoff_minutes' => 'SMALLINT UNSIGNED NOT NULL DEFAULT 45 AFTER hold_minutes',
             'pagarme_webhook_username' => 'VARCHAR(190) NULL AFTER pagarme_webhook_secret_encrypted',
             'pagarme_webhook_password_encrypted' => 'TEXT NULL AFTER pagarme_webhook_username',
             'infinitepay_handle' => 'VARCHAR(190) NULL AFTER pagarme_webhook_password_encrypted',
@@ -77,6 +79,21 @@ final class PublicPortal
         self::ensureColumns($db, 'public_login_tokens', [
             'attempts' => 'TINYINT UNSIGNED NOT NULL DEFAULT 0 AFTER token_hash',
         ]);
+        self::ensureColumns($db, 'room_seats', [
+            'unavailable' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER seat_type',
+        ]);
+        $ticketCancelColumn = $db->query("SHOW COLUMNS FROM tickets LIKE 'canceled_at'")->fetch();
+        if (!$ticketCancelColumn) {
+            $db->exec('ALTER TABLE tickets ADD COLUMN canceled_at DATETIME NULL AFTER checked_in_by, ADD COLUMN canceled_by INT UNSIGNED NULL AFTER canceled_at, ADD COLUMN cancel_reason TEXT NULL AFTER canceled_by');
+        }
+        $legacyTicketIndex = $db->query("SHOW INDEX FROM tickets WHERE Key_name = 'uniq_ticket_showtime_seat'")->fetchAll();
+        if ($legacyTicketIndex) {
+            $db->exec('ALTER TABLE tickets DROP INDEX uniq_ticket_showtime_seat');
+        }
+        $ticketStatusIndex = $db->query("SHOW INDEX FROM tickets WHERE Key_name = 'uniq_ticket_showtime_seat_status'")->fetchAll();
+        if ($ticketStatusIndex) {
+            $db->exec('ALTER TABLE tickets DROP INDEX uniq_ticket_showtime_seat_status');
+        }
         self::ensureColumns($db, 'movies', [
             'age_rating' => "ENUM('L','10','12','14','16','18') NOT NULL DEFAULT 'L' AFTER genre",
         ]);
@@ -146,7 +163,7 @@ final class PublicPortal
     public static function settings(PDO $db): array
     {
         self::ensureSchema($db);
-        $defaults = ['sales_enabled'=>0,'hold_minutes'=>10,'payment_gateway'=>'pagarme','pagarme_public_key'=>'','pagarme_secret_encrypted'=>'','pagarme_webhook_secret_encrypted'=>'','pagarme_webhook_username'=>'','pagarme_webhook_password_encrypted'=>'','infinitepay_handle'=>'','google_client_id'=>'','google_client_secret_encrypted'=>'','privacy_contact_email'=>'','cookie_policy_version'=>'1.0'];
+        $defaults = ['sales_enabled'=>0,'hold_minutes'=>10,'public_sale_cutoff_minutes'=>45,'payment_gateway'=>'pagarme','pagarme_public_key'=>'','pagarme_secret_encrypted'=>'','pagarme_webhook_secret_encrypted'=>'','pagarme_webhook_username'=>'','pagarme_webhook_password_encrypted'=>'','infinitepay_handle'=>'','google_client_id'=>'','google_client_secret_encrypted'=>'','privacy_contact_email'=>'','cookie_policy_version'=>'1.0'];
         $row = $db->query('SELECT * FROM public_portal_settings WHERE id=1')->fetch();
         return array_merge($defaults, $row ?: []);
     }

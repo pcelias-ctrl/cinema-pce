@@ -102,6 +102,8 @@ p { line-height:1.5; }
 .public-seat input:checked + span { background:var(--yellow); color:#17120f; box-shadow:0 0 0 3px rgba(245,197,66,.28); }
 .public-seat.blocked { cursor:not-allowed; }
 .public-seat.blocked span { background:var(--red); opacity:.78; }
+.public-seat.unavailable { cursor:not-allowed; }
+.public-seat.unavailable span { background:#8b949e; opacity:.9; }
 .seat-cart,.checkout-summary { position:sticky; top:78px; display:grid; gap:12px; padding:15px; border:1px solid var(--line); border-radius:6px; background:#fff; box-shadow:0 8px 22px rgba(23,18,15,.08); }
 .seat-cart h2,.checkout-summary h2 { font-size:17px; }
 .seat-legend { display:flex; flex-wrap:wrap; gap:9px; color:var(--muted); font-size:10px; }
