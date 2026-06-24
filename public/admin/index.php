@@ -125,7 +125,7 @@ function save_movie_image(array $file, string $label): ?array
 
     $data = file_get_contents($file['tmp_name']);
     if ($data === false) {
-        throw new RuntimeException('Nao foi possivel ler a imagem de ' . $label . ' enviada.');
+        throw new RuntimeException('Não foi possível ler a imagem de ' . $label . ' enviada.');
     }
 
     return ['mime' => $info['mime'], 'data' => $data];
@@ -1354,7 +1354,7 @@ try {
                     </div>
                 </fieldset>
                 <label>Capa do filme<input name="cover" type="file" accept="image/jpeg,image/png,image/webp"></label>
-                <label>Banner horizontal de prÃ©-venda/prÃ©-estreia<input name="promo_banner" type="file" accept="image/jpeg,image/png,image/webp"><small>Use imagem larga e baixa. Recomendado: 1200x300 ou proporÃ§Ã£o parecida.</small></label>
+                <label>Banner horizontal de pré-venda/pré-estreia<input name="promo_banner" type="file" accept="image/jpeg,image/png,image/webp"><small>Use imagem larga e baixa. Recomendado: 1200x300 ou proporção parecida.</small></label>
                 <?php if (!empty($movie['promo_banner_data'])): ?>
                     <div class="movie-banner-current"><img src="index.php?route=movie_banner&id=<?= (int) $movie['id'] ?>" alt="Banner atual"></div>
                 <?php endif; ?>
