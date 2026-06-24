@@ -37,7 +37,7 @@ function layout(string $title, callable $content): void
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?= e($title) ?> - <?= e($cinema['cinema_name']) ?></title>
         <link rel="stylesheet" href="/assets/vendor/adminlte/css/adminlte.min.css">
-        <link rel="stylesheet" href="/assets/css/app.css?v=20260621b">
+        <link rel="stylesheet" href="/assets/css/app.css?v=20260623a">
     </head>
     <body class="layout-fixed sidebar-expand-lg bg-body-tertiary route-<?= e(str_replace('_', '-', $currentRoute)) ?> <?= $user ? 'app-shell' : 'public-shell' ?>">
       <div class="app-wrapper">
@@ -587,6 +587,73 @@ function cash_totals(int $cashRegisterId): array
     return $totals;
 }
 
+function ensure_admin_seat_hold_table(): void
+{
+    static $ready = false;
+    if ($ready) return;
+
+    db()->exec("CREATE TABLE IF NOT EXISTS admin_seat_holds (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        showtime_id INT UNSIGNED NOT NULL,
+        room_seat_id INT UNSIGNED NOT NULL,
+        user_id INT UNSIGNED NOT NULL,
+        session_id VARCHAR(128) NOT NULL,
+        expires_at DATETIME NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_admin_hold_seat (showtime_id, room_seat_id),
+        INDEX idx_admin_hold_session (session_id, expires_at),
+        CONSTRAINT fk_admin_hold_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id) ON DELETE CASCADE,
+        CONSTRAINT fk_admin_hold_seat FOREIGN KEY (room_seat_id) REFERENCES room_seats(id) ON DELETE CASCADE,
+        CONSTRAINT fk_admin_hold_user FOREIGN KEY (user_id) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    db()->exec('DELETE FROM admin_seat_holds WHERE expires_at <= NOW()');
+    $ready = true;
+}
+
+function admin_seat_hold_ttl(): int
+{
+    return 35;
+}
+
+function admin_sale_seat_statuses(int $showtimeId, int $roomId): array
+{
+    ensure_admin_seat_hold_table();
+    $sessionId = session_id();
+    $stmt = db()->prepare(
+        "SELECT room_seats.id, room_seats.unavailable,
+            tickets.id sold_ticket_id,
+            public_seat_holds.id public_hold_id,
+            admin_seat_holds.id admin_hold_id,
+            admin_seat_holds.session_id admin_hold_session
+         FROM room_seats
+         LEFT JOIN tickets ON tickets.room_seat_id = room_seats.id
+            AND tickets.showtime_id = ?
+            AND tickets.status IN ('reservado', 'vendido')
+         LEFT JOIN public_seat_holds ON public_seat_holds.room_seat_id = room_seats.id
+            AND public_seat_holds.showtime_id = ?
+            AND public_seat_holds.expires_at > NOW()
+         LEFT JOIN admin_seat_holds ON admin_seat_holds.room_seat_id = room_seats.id
+            AND admin_seat_holds.showtime_id = ?
+            AND admin_seat_holds.expires_at > NOW()
+         WHERE room_seats.room_id = ?
+         ORDER BY room_seats.row_label, room_seats.seat_number"
+    );
+    $stmt->execute([$showtimeId, $showtimeId, $showtimeId, $roomId]);
+    $statuses = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $heldByMe = !empty($row['admin_hold_id']) && hash_equals($sessionId, (string) $row['admin_hold_session']);
+        $statuses[] = [
+            'id' => (int) $row['id'],
+            'unavailable' => !empty($row['unavailable']),
+            'sold' => !empty($row['sold_ticket_id']) || !empty($row['public_hold_id']),
+            'held' => !empty($row['admin_hold_id']) && !$heldByMe,
+            'held_by_me' => $heldByMe,
+        ];
+    }
+    return $statuses;
+}
+
 function current_query(array $overrides = []): string
 {
     $params = array_merge($_GET, $overrides);
@@ -613,6 +680,91 @@ try {
         header('Content-Type: ' . $logo['logo_mime']);
         header('Cache-Control: private, max-age=3600');
         echo $logo['logo_data'];
+        exit;
+    }
+
+    if ($route === 'sale_seat_status') {
+        Auth::requireLogin();
+        PublicPortal::ensureSchema(db());
+        ensure_admin_seat_hold_table();
+        $showtimeId = (int) ($_GET['showtime_id'] ?? 0);
+        $stmt = db()->prepare('SELECT room_id FROM showtimes WHERE id = ? AND status = "programada" LIMIT 1');
+        $stmt->execute([$showtimeId]);
+        $showtime = $stmt->fetch();
+        if (!$showtime) {
+            http_response_code(404);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['ok' => false, 'message' => 'Sessão indisponível.']);
+            exit;
+        }
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['ok' => true, 'seats' => admin_sale_seat_statuses($showtimeId, (int) $showtime['room_id'])]);
+        exit;
+    }
+
+    if ($route === 'sale_seat_hold') {
+        Auth::requireLogin();
+        PublicPortal::ensureSchema(db());
+        ensure_admin_seat_hold_table();
+        verify_csrf();
+        $showtimeId = (int) ($_POST['showtime_id'] ?? 0);
+        $seatId = (int) ($_POST['seat_id'] ?? 0);
+        $action = $_POST['action'] ?? 'hold';
+        $sessionId = session_id();
+        $userId = (int) Auth::user()['id'];
+        $response = ['ok' => false, 'message' => 'Não foi possível reservar esta poltrona.'];
+
+        db()->beginTransaction();
+        try {
+            db()->exec('DELETE FROM admin_seat_holds WHERE expires_at <= NOW()');
+            $seatStmt = db()->prepare(
+                "SELECT room_seats.id, room_seats.seat_code, room_seats.unavailable, showtimes.room_id
+                 FROM showtimes
+                 INNER JOIN room_seats ON room_seats.room_id = showtimes.room_id
+                 WHERE showtimes.id = ? AND showtimes.status = 'programada' AND room_seats.id = ?
+                 FOR UPDATE"
+            );
+            $seatStmt->execute([$showtimeId, $seatId]);
+            $seat = $seatStmt->fetch();
+            if (!$seat) throw new RuntimeException('Sessão ou poltrona indisponível.');
+            if (!empty($seat['unavailable'])) throw new RuntimeException('Esta poltrona está inutilizada.');
+
+            if ($action === 'release') {
+                $delete = db()->prepare('DELETE FROM admin_seat_holds WHERE showtime_id = ? AND room_seat_id = ? AND session_id = ?');
+                $delete->execute([$showtimeId, $seatId, $sessionId]);
+                db()->commit();
+                $response = ['ok' => true, 'released' => true, 'seats' => admin_sale_seat_statuses($showtimeId, (int) $seat['room_id'])];
+            } else {
+                $ticket = db()->prepare("SELECT id FROM tickets WHERE showtime_id = ? AND room_seat_id = ? AND status IN ('reservado','vendido') LIMIT 1");
+                $ticket->execute([$showtimeId, $seatId]);
+                if ($ticket->fetch()) throw new RuntimeException('Essa poltrona acabou de ser vendida em outro terminal.');
+
+                $publicHold = db()->prepare('SELECT id FROM public_seat_holds WHERE showtime_id = ? AND room_seat_id = ? AND expires_at > NOW() LIMIT 1');
+                $publicHold->execute([$showtimeId, $seatId]);
+                if ($publicHold->fetch()) throw new RuntimeException('Essa poltrona está sendo comprada pela internet.');
+
+                $hold = db()->prepare('SELECT * FROM admin_seat_holds WHERE showtime_id = ? AND room_seat_id = ? FOR UPDATE');
+                $hold->execute([$showtimeId, $seatId]);
+                $existing = $hold->fetch();
+                if ($existing && !hash_equals($sessionId, (string) $existing['session_id']) && strtotime((string) $existing['expires_at']) > time()) {
+                    throw new RuntimeException('Essa poltrona acabou de ser selecionada em outro terminal.');
+                }
+                if ($existing) {
+                    $update = db()->prepare('UPDATE admin_seat_holds SET user_id = ?, session_id = ?, expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE id = ?');
+                    $update->execute([$userId, $sessionId, admin_seat_hold_ttl(), (int) $existing['id']]);
+                } else {
+                    $insert = db()->prepare('INSERT INTO admin_seat_holds (showtime_id, room_seat_id, user_id, session_id, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? SECOND))');
+                    $insert->execute([$showtimeId, $seatId, $userId, $sessionId, admin_seat_hold_ttl()]);
+                }
+                db()->commit();
+                $response = ['ok' => true, 'held' => true, 'seats' => admin_sale_seat_statuses($showtimeId, (int) $seat['room_id'])];
+            }
+        } catch (Throwable $exception) {
+            if (db()->inTransaction()) db()->rollBack();
+            $response = ['ok' => false, 'message' => $exception->getMessage()];
+        }
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($response);
         exit;
     }
 
@@ -1600,7 +1752,6 @@ try {
         Auth::requireLogin();
         $cash = open_cash_register();
         $date = trim($_GET['date'] ?? date('Y-m-d'));
-        $nowLocal = (new DateTimeImmutable('now', new DateTimeZone('America/Sao_Paulo')))->format('Y-m-d H:i:s');
         $stmt = db()->prepare(
             'SELECT showtimes.*, movies.title movie_title, movies.duration_minutes, movies.cover_data IS NOT NULL has_cover, rooms.name room_name
              FROM showtimes
@@ -1620,9 +1771,12 @@ try {
             <?php endif; ?>
             <form method="get" class="panel form filters">
                 <input type="hidden" name="route" value="sales">
+                <input type="hidden" name="sale_code" value="">
                 <div class="columns compact">
+                    <label>Cancelar venda / ingresso<input name="cancel_code" value="" placeholder="Digite o numero impresso"></label>
                     <label>Data da sessão<input name="date" type="date" value="<?= e($date) ?>"></label>
                 </div>
+                <button class="button danger" type="submit" onclick="this.form.route.value='ticket_cancel'; this.form.sale_code.value=this.form.cancel_code.value;">Cancelar venda</button>
                 <button class="button primary">Buscar sessões</button>
             </form>
             <div class="grid cards">
@@ -1649,6 +1803,7 @@ try {
     if ($route === 'sale_new') {
         Auth::requireLogin();
         PublicPortal::ensureSchema(db());
+        ensure_admin_seat_hold_table();
         $cash = open_cash_register();
         if (!$cash) {
             redirect_to('cash_register');
@@ -1704,8 +1859,9 @@ try {
 
             db()->beginTransaction();
             try {
+            db()->exec('DELETE FROM admin_seat_holds WHERE expires_at <= NOW()');
             $placeholders = implode(',', array_fill(0, count($seatIds), '?'));
-            $params = array_merge([$showtimeId], $seatIds);
+            $params = array_merge([$showtimeId], [$showtimeId], [$showtimeId], $seatIds);
             $check = db()->prepare(
                 "SELECT room_seats.id, room_seats.seat_code
                  FROM room_seats
@@ -1715,15 +1871,19 @@ try {
                  LEFT JOIN public_seat_holds ON public_seat_holds.room_seat_id = room_seats.id
                     AND public_seat_holds.showtime_id = ?
                     AND public_seat_holds.expires_at > NOW()
+                 LEFT JOIN admin_seat_holds ON admin_seat_holds.room_seat_id = room_seats.id
+                    AND admin_seat_holds.showtime_id = ?
+                    AND admin_seat_holds.expires_at > NOW()
                  WHERE room_seats.id IN ($placeholders)
                     AND room_seats.room_id = ?
                     AND room_seats.unavailable = 0
                     AND tickets.id IS NULL
                     AND public_seat_holds.id IS NULL
+                    AND (admin_seat_holds.id IS NULL OR admin_seat_holds.session_id = ?)
                  FOR UPDATE"
             );
-            array_splice($params, 1, 0, [$showtimeId]);
             $params[] = (int) $showtime['room_id'];
+            $params[] = session_id();
             $check->execute($params);
             $availableSeats = $check->fetchAll();
             if (count($availableSeats) !== count($seatIds)) {
@@ -1785,6 +1945,8 @@ try {
                     $stockUpdate->execute([$quantity, $productId]);
                 }
             }
+            $releaseHolds = db()->prepare("DELETE FROM admin_seat_holds WHERE showtime_id = ? AND session_id = ? AND room_seat_id IN ($placeholders)");
+            $releaseHolds->execute(array_merge([$showtimeId, session_id()], $seatIds));
             db()->commit();
             } catch (Throwable $exception) {
                 if (db()->inTransaction()) db()->rollBack();
@@ -1798,8 +1960,10 @@ try {
             exit;
         }
 
+        db()->exec('DELETE FROM admin_seat_holds WHERE expires_at <= NOW()');
         $seatsStmt = db()->prepare(
-            "SELECT room_seats.*, tickets.id sold_ticket_id, public_seat_holds.id held_seat_id
+            "SELECT room_seats.*, tickets.id sold_ticket_id, public_seat_holds.id held_seat_id,
+                admin_seat_holds.id admin_hold_id, admin_seat_holds.session_id admin_hold_session
              FROM room_seats
              LEFT JOIN tickets ON tickets.room_seat_id = room_seats.id
                 AND tickets.showtime_id = ?
@@ -1807,10 +1971,13 @@ try {
              LEFT JOIN public_seat_holds ON public_seat_holds.room_seat_id = room_seats.id
                 AND public_seat_holds.showtime_id = ?
                 AND public_seat_holds.expires_at > NOW()
+             LEFT JOIN admin_seat_holds ON admin_seat_holds.room_seat_id = room_seats.id
+                AND admin_seat_holds.showtime_id = ?
+                AND admin_seat_holds.expires_at > NOW()
              WHERE room_seats.room_id = ?
              ORDER BY room_seats.row_label, room_seats.seat_number"
         );
-        $seatsStmt->execute([$showtimeId, $showtimeId, (int) $showtime['room_id']]);
+        $seatsStmt->execute([$showtimeId, $showtimeId, $showtimeId, (int) $showtime['room_id']]);
         $seats = $seatsStmt->fetchAll();
         $cinemaSettings = cinema_settings();
         $adminProductsEnabled = (int) ($cinemaSettings['admin_products_enabled'] ?? 1) === 1;
@@ -1821,15 +1988,17 @@ try {
         layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products, $adminProductsEnabled) {
             ?>
             <?php if (!empty($_GET['seat_conflict'])): ?><p class="sale-conflict">Uma poltrona foi vendida em outro terminal. O mapa foi atualizado; selecione outra.</p><?php endif; ?>
-            <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>">
+            <p class="sale-conflict" id="sale-seat-notice" hidden></p>
+            <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>" data-showtime-id="<?= (int) $showtime['id'] ?>" data-seat-status-url="index.php?route=sale_seat_status" data-seat-hold-url="index.php?route=sale_seat_hold">
                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                 <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
                 <section class="panel sale-map-panel">
                     <div class="sale-map" aria-label="Mapa de poltronas">
                         <div class="sale-screen" style="left:<?= e(((float) ($screen['x'] ?? 270) / 1040) * 100) ?>%;top:<?= e(((float) ($screen['y'] ?? 28) / 620) * 100) ?>%;width:<?= e(((float) ($screen['w'] ?? 500) / 1040) * 100) ?>%;height:<?= e(((float) ($screen['h'] ?? 34) / 620) * 100) ?>%;">TELA</div>
                         <?php foreach ($seats as $seat): ?>
-                            <?php $unavailable = !empty($seat['unavailable']); $sold = !$unavailable && (!empty($seat['sold_ticket_id']) || !empty($seat['held_seat_id'])); ?>
-                            <label class="sale-seat <?= $seat['seat_type'] === 'grande' ? 'large' : '' ?> <?= $sold ? 'sold' : '' ?> <?= $unavailable ? 'unavailable' : '' ?>"
+                            <?php $heldByMe = !empty($seat['admin_hold_id']) && hash_equals(session_id(), (string) $seat['admin_hold_session']); $unavailable = !empty($seat['unavailable']); $held = !$heldByMe && !empty($seat['admin_hold_id']); $sold = !$unavailable && (!empty($seat['sold_ticket_id']) || !empty($seat['held_seat_id']) || $held); ?>
+                            <label class="sale-seat <?= $seat['seat_type'] === 'grande' ? 'large' : '' ?> <?= $sold ? 'sold' : '' ?> <?= $held ? 'held' : '' ?> <?= $unavailable ? 'unavailable' : '' ?>"
+                                data-seat-id="<?= (int) $seat['id'] ?>"
                                 style="left:<?= e(((float) $seat['pos_x'] / 1040) * 100) ?>%;top:<?= e(((float) $seat['pos_y'] / 620) * 100) ?>%;width:<?= e(((float) $seat['width'] / 1040) * 100) ?>%;height:<?= e(((float) $seat['height'] / 620) * 100) ?>%;"
                                 title="<?= e($seat['seat_code']) ?>">
                                 <input type="checkbox" name="seat_ids[]" value="<?= (int) $seat['id'] ?>" <?= ($sold || $unavailable) ? 'disabled' : '' ?>>
@@ -1853,6 +2022,7 @@ try {
                         <span><i class="free"></i>Disponível</span>
                         <span><i class="selected"></i>Selecionada</span>
                         <span><i class="sold"></i>Ocupada</span>
+                        <span><i class="held"></i>Em outro terminal</span>
                     </div>
                     <div class="sale-summary">
                         <p class="summary-item">Poltronas <strong id="selected-seats">Nenhuma</strong></p>
@@ -1901,7 +2071,7 @@ try {
                     </section>
                 </div>
             </form>
-            <script src="/assets/js/sale.js"></script>
+            <script src="/assets/js/sale.js?v=<?= (int) filemtime(__DIR__ . '/../assets/js/sale.js') ?>"></script>
             <?php
         });
         exit;
@@ -1973,6 +2143,12 @@ try {
         $tickets = [];
         $products = [];
         if ($saleCode !== '') {
+            $saleLookup = db()->prepare('SELECT sale_code FROM tickets WHERE sale_code = ? OR qr_token = ? LIMIT 1');
+            $saleLookup->execute([$saleCode, $saleCode]);
+            $resolvedSaleCode = $saleLookup->fetchColumn();
+            if ($resolvedSaleCode) {
+                $saleCode = (string) $resolvedSaleCode;
+            }
             $stmt = db()->prepare(
                 'SELECT tickets.*, room_seats.seat_code, movies.title movie_title, rooms.name room_name, showtimes.starts_at
                  FROM tickets

@@ -313,6 +313,22 @@ CREATE TABLE public_seat_holds (
     CONSTRAINT fk_public_hold_seat FOREIGN KEY (room_seat_id) REFERENCES room_seats(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE admin_seat_holds (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    showtime_id INT UNSIGNED NOT NULL,
+    room_seat_id INT UNSIGNED NOT NULL,
+    user_id INT UNSIGNED NOT NULL,
+    session_id VARCHAR(128) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_admin_hold_seat (showtime_id, room_seat_id),
+    INDEX idx_admin_hold_session (session_id, expires_at),
+    CONSTRAINT fk_admin_hold_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id) ON DELETE CASCADE,
+    CONSTRAINT fk_admin_hold_seat FOREIGN KEY (room_seat_id) REFERENCES room_seats(id) ON DELETE CASCADE,
+    CONSTRAINT fk_admin_hold_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE public_order_products (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     order_id BIGINT UNSIGNED NOT NULL,

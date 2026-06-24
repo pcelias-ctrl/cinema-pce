@@ -13,6 +13,14 @@
     const continueButton = document.getElementById('continue-sale');
     const wizard = document.getElementById('sale-wizard');
     const wizardTotal = document.getElementById('wizard-total');
+    const notice = document.getElementById('sale-seat-notice');
+    const csrf = form.querySelector('input[name="csrf_token"]')?.value || '';
+    const showtimeId = form.dataset.showtimeId || '';
+    const statusUrl = form.dataset.seatStatusUrl || '';
+    const holdUrl = form.dataset.seatHoldUrl || '';
+    let statusTimer = null;
+    let holdRenewTimer = null;
+    let saleSubmitting = false;
 
     function parseMoney(value) {
         value = String(value || '').trim();
@@ -28,6 +36,18 @@
 
     function selectedSeats() {
         return [...form.querySelectorAll('.sale-seat input[type="checkbox"]:checked')];
+    }
+
+    function showNotice(message) {
+        if (!notice) return;
+        notice.textContent = message;
+        notice.hidden = !message;
+        if (message) {
+            window.clearTimeout(showNotice.timeout);
+            showNotice.timeout = window.setTimeout(() => {
+                notice.hidden = true;
+            }, 6000);
+        }
     }
 
     function activeTicketType() {
@@ -74,10 +94,90 @@
         continueButton.disabled = selected.length === 0;
     }
 
+    async function seatRequest(action, seatId) {
+        if (!holdUrl || !showtimeId || !seatId) return { ok: true };
+        const body = new URLSearchParams();
+        body.set('csrf_token', csrf);
+        body.set('showtime_id', showtimeId);
+        body.set('seat_id', seatId);
+        body.set('action', action);
+        const response = await fetch(holdUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body,
+            credentials: 'same-origin'
+        });
+        return response.json();
+    }
+
+    function applySeatStatuses(seats) {
+        const checkedBefore = new Set(selectedSeats().map((input) => input.value));
+        seats.forEach((seat) => {
+            const label = form.querySelector(`.sale-seat[data-seat-id="${seat.id}"]`);
+            if (!label) return;
+            const input = label.querySelector('input[type="checkbox"]');
+            const blocked = seat.unavailable || seat.sold || seat.held;
+            label.classList.toggle('unavailable', Boolean(seat.unavailable));
+            label.classList.toggle('held', Boolean(seat.held));
+            label.classList.toggle('sold', Boolean(seat.sold || seat.held));
+            if (blocked && !seat.held_by_me) {
+                if (input.checked) {
+                    input.checked = false;
+                    setSeatType(input, input.dataset.ticketType || 'inteira');
+                    showNotice(seat.held ? 'Essa poltrona acabou de ser selecionada em outro terminal.' : 'Essa poltrona acabou de ficar indisponivel.');
+                }
+                input.disabled = true;
+            } else {
+                input.disabled = false;
+            }
+        });
+        const checkedAfter = new Set(selectedSeats().map((input) => input.value));
+        if (checkedBefore.size !== checkedAfter.size) update();
+    }
+
+    async function refreshSeats() {
+        if (!statusUrl || !showtimeId) return;
+        try {
+            const response = await fetch(`${statusUrl}&showtime_id=${encodeURIComponent(showtimeId)}`, { credentials: 'same-origin' });
+            const payload = await response.json();
+            if (payload.ok && Array.isArray(payload.seats)) applySeatStatuses(payload.seats);
+        } catch (error) {
+            // Mantem a venda fluida mesmo se uma consulta pontual falhar.
+        }
+    }
+
+    async function renewSelectedHolds() {
+        if (!holdUrl || !showtimeId) return;
+        await Promise.allSettled(selectedSeats().map((input) => seatRequest('hold', input.value)));
+    }
+
     form.querySelectorAll('.sale-seat input[type="checkbox"]').forEach((input) => {
-        input.addEventListener('change', () => {
-            if (input.checked) setSeatType(input, activeTicketType());
-            else setSeatType(input, input.dataset.ticketType || 'inteira');
+        input.addEventListener('change', async () => {
+            input.disabled = true;
+            try {
+                if (input.checked) {
+                    const result = await seatRequest('hold', input.value);
+                    if (!result.ok) {
+                        input.checked = false;
+                        input.disabled = false;
+                        showNotice(result.message || 'Essa poltrona acabou de ser selecionada em outro terminal.');
+                        if (Array.isArray(result.seats)) applySeatStatuses(result.seats);
+                        update();
+                        return;
+                    }
+                    setSeatType(input, activeTicketType());
+                    if (Array.isArray(result.seats)) applySeatStatuses(result.seats);
+                } else {
+                    await seatRequest('release', input.value);
+                    setSeatType(input, input.dataset.ticketType || 'inteira');
+                    input.disabled = false;
+                }
+            } catch (error) {
+                input.checked = false;
+                setSeatType(input, input.dataset.ticketType || 'inteira');
+                input.disabled = false;
+                showNotice('Falha ao reservar a poltrona. Tente novamente.');
+            }
             update();
         });
     });
@@ -112,6 +212,7 @@
     form.addEventListener('input', update);
     form.addEventListener('submit', () => {
         if (selectedSeats().length === 0 || finishButton.disabled) return;
+        saleSubmitting = true;
         const popup = window.open('', 'cinema_sale_print_pending', 'popup=yes,width=420,height=720');
         if (!popup) return;
         popup.document.open();
@@ -119,5 +220,20 @@
         popup.document.close();
         popup.focus();
     });
+    window.addEventListener('beforeunload', () => {
+        if (saleSubmitting) return;
+        selectedSeats().forEach((input) => {
+            if (!holdUrl || !showtimeId) return;
+            const body = new URLSearchParams();
+            body.set('csrf_token', csrf);
+            body.set('showtime_id', showtimeId);
+            body.set('seat_id', input.value);
+            body.set('action', 'release');
+            navigator.sendBeacon?.(holdUrl, body);
+        });
+    });
+    refreshSeats();
+    statusTimer = window.setInterval(refreshSeats, 4000);
+    holdRenewTimer = window.setInterval(renewSelectedHolds, 10000);
     update();
 })();
