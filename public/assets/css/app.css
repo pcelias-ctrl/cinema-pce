@@ -683,7 +683,8 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .sale-session-info .eyebrow { margin: 0; }
 .sale-session-info h1 { margin: 1px 0 4px; font-size: 19px; line-height: 1.15; }
 .sale-session-info strong { font-size: 17px; }
-.sale-session-info > span:last-child { color: var(--muted); font-size: 12px; }
+.sale-session-info > span:last-child { color: var(--muted); font-size: 14px; font-weight: 800; }
+.sale-showtime-time { font-size: 16px; font-weight: 900; color: var(--brand-dark); }
 .sale-side-cover { width: 76px; height: 108px; object-fit: contain; object-position: center; border-radius: 4px; background: #eef1ef; }
 .sale-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
 .sale-summary .summary-item:first-child,

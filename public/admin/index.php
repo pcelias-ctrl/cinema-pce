@@ -1995,7 +1995,7 @@ try {
                         <?php if ($showtime['has_cover']): ?><img src="index.php?route=movie_cover&id=<?= (int) $showtime['movie_id'] ?>" alt=""><?php endif; ?>
                         <div>
                             <h2><?= e($showtime['movie_title']) ?></h2>
-                            <p><?= e($showtime['room_name']) ?> | <?= e(ucfirst($showtime['audio_type'])) ?> | <?= !empty($showtime['is_3d']) ? '3D' : '2D' ?> | <?= e(date('H:i', strtotime($showtime['starts_at']))) ?></p>
+                            <p><?= e($showtime['room_name']) ?> | <?= e(ucfirst($showtime['audio_type'])) ?> | <?= !empty($showtime['is_3d']) ? '3D' : '2D' ?> | <strong class="sale-showtime-time"><?= e(date('H:i', strtotime($showtime['starts_at']))) ?></strong></p>
                             <p>Inteira R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?> | Meia R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></p>
                             <a class="button primary" href="<?= $cash ? 'index.php?route=sale_new&showtime_id=' . (int) $showtime['id'] : 'index.php?route=cash_register' ?>">Vender</a>
                         </div>
@@ -2318,9 +2318,9 @@ try {
                     <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
                     <section class="ticket-print">
                         <h1><?= e($cinema['cinema_name']) ?></h1>
-                        <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                        <p class="ticket-main-info"><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
                         <p><strong>Classificação:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
-                        <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
+                        <p class="ticket-main-info"><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
                         <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
                         <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
                         <p><strong>Ingresso:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?> | R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
@@ -2474,7 +2474,7 @@ try {
                 .receipt{width:40ch;max-width:calc(100% - 8mm);margin:0 auto;padding:4mm 0;text-align:left;overflow-wrap:anywhere}
                 .receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}
                 h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
-                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}
+                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}.ticket-main-info{font-size:15px;font-weight:700;line-height:1.18;margin:4px 0}
                 [data-ticket-qr]{width:36mm;height:36mm;margin:8px auto 4px}[data-ticket-qr] canvas,[data-ticket-qr] img{width:36mm!important;height:36mm!important;display:block}
                 .code{text-align:center;font-size:8px;word-break:break-all}.thanks{text-align:center;margin-top:8px;font-weight:700}
                 .receipt+.receipt{break-before:page;page-break-before:always}
@@ -2495,9 +2495,9 @@ try {
                     </div>
                     <div class="line"></div>
                     <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
-                    <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                    <p class="ticket-main-info"><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
                     <p><strong>Classificacao:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
-                    <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
+                    <p class="ticket-main-info"><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
                     <p><strong>Sessao:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
                     <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
                     <p><strong>Tipo:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?></p>
@@ -2569,7 +2569,7 @@ try {
                 .receipt{width:40ch;max-width:calc(100% - 8mm);margin:0 auto;padding:4mm 0;text-align:left;overflow-wrap:anywhere}
                 .receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}
                 h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
-                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}
+                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}.ticket-main-info{font-size:15px;font-weight:700;line-height:1.18;margin:4px 0}
                 [data-ticket-qr]{width:36mm;height:36mm;margin:8px auto 4px}[data-ticket-qr] canvas,[data-ticket-qr] img{width:36mm!important;height:36mm!important;display:block}
                 .code{text-align:center;font-size:8px;word-break:break-all}.thanks{text-align:center;margin-top:8px;font-weight:700}
                 .receipt+.receipt{break-before:page;page-break-before:always}
@@ -2590,9 +2590,9 @@ try {
                     </div>
                     <div class="line"></div>
                     <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
-                    <p><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
+                    <p class="ticket-main-info"><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
                     <p><strong>Classificação:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
-                    <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
+                    <p class="ticket-main-info"><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
                     <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
                     <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
                     <p><strong>Tipo:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?></p>
