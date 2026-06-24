@@ -37,7 +37,7 @@ function layout(string $title, callable $content): void
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title><?= e($title) ?> - <?= e($cinema['cinema_name']) ?></title>
         <link rel="stylesheet" href="/assets/vendor/adminlte/css/adminlte.min.css">
-        <link rel="stylesheet" href="/assets/css/app.css?v=20260623a">
+        <link rel="stylesheet" href="/assets/css/app.css?v=20260623b">
     </head>
     <body class="layout-fixed sidebar-expand-lg bg-body-tertiary route-<?= e(str_replace('_', '-', $currentRoute)) ?> <?= $user ? 'app-shell' : 'public-shell' ?>">
       <div class="app-wrapper">
@@ -1341,7 +1341,7 @@ try {
             'date_to' => trim($_GET['date_to'] ?? ''),
             'room_id' => (int) ($_GET['room_id'] ?? 0),
             'audio_type' => $_GET['audio_type'] ?? '',
-            'status' => $_GET['status'] ?? '',
+            'status' => $_GET['status'] ?? 'programada',
             'sort' => $_GET['sort'] ?? 'starts_at_asc',
             'group_by' => $_GET['group_by'] ?? 'day',
         ];
@@ -1407,6 +1407,9 @@ try {
                 <h1>Sessões</h1>
                 <a class="button primary" href="index.php?route=showtime_new">Nova sessão</a>
             </div>
+            <?php if (isset($_GET['created'])): ?>
+                <p class="alert success"><?= (int) $_GET['created'] ?> sessao(oes) criada(s). <?= (int) ($_GET['skipped'] ?? 0) ?> horario(s) ignorado(s) por ja existir na mesma sala.</p>
+            <?php endif; ?>
             <form method="get" class="panel form filters">
                 <input type="hidden" name="route" value="showtimes">
                 <div class="columns compact">
@@ -1537,28 +1540,88 @@ try {
             }
             $starts = array_values(array_unique(array_filter(array_map('normalize_datetime_local', $starts))));
 
+            $periodFrom = trim($_POST['period_date_from'] ?? '');
+            $periodTo = trim($_POST['period_date_to'] ?? '');
+            $periodTimes = trim($_POST['period_times'] ?? '');
+            if ($periodFrom !== '' && $periodTo !== '' && $periodTimes !== '') {
+                $from = DateTimeImmutable::createFromFormat('Y-m-d', $periodFrom);
+                $to = DateTimeImmutable::createFromFormat('Y-m-d', $periodTo);
+                if (!$from || !$to || $to < $from) {
+                    throw new RuntimeException('Informe um período de datas válido.');
+                }
+                if ($from->diff($to)->days > 120) {
+                    throw new RuntimeException('O período máximo para gerar sessões em lote é de 120 dias.');
+                }
+                $weekdays = array_values(array_filter(array_map('intval', (array) ($_POST['period_weekdays'] ?? [])), static fn($day) => $day >= 1 && $day <= 7));
+                if (!$weekdays) {
+                    $weekdays = [1, 2, 3, 4, 5, 6, 7];
+                }
+                $times = preg_split('/[\s,;]+/', $periodTimes) ?: [];
+                $times = array_values(array_unique(array_filter(array_map(static function ($time): string {
+                    $time = trim($time);
+                    if (preg_match('/^\d{1,2}:\d{2}$/', $time)) {
+                        [$hour, $minute] = array_map('intval', explode(':', $time));
+                        if ($hour >= 0 && $hour <= 23 && $minute >= 0 && $minute <= 59) {
+                            return sprintf('%02d:%02d', $hour, $minute);
+                        }
+                    }
+                    return '';
+                }, $times))));
+                if (!$times) {
+                    throw new RuntimeException('Informe pelo menos um horário válido para o período.');
+                }
+                for ($date = $from; $date <= $to; $date = $date->modify('+1 day')) {
+                    if (!in_array((int) $date->format('N'), $weekdays, true)) {
+                        continue;
+                    }
+                    foreach ($times as $time) {
+                        $starts[] = $date->format('Y-m-d') . ' ' . $time . ':00';
+                    }
+                }
+                $starts = array_values(array_unique($starts));
+                sort($starts);
+            }
+
             if (!$starts) {
                 throw new RuntimeException('Adicione pelo menos um horário de exibição válido.');
             }
 
+            $placeholders = implode(',', array_fill(0, count($starts), '?'));
+            $existingSql = "SELECT starts_at FROM showtimes WHERE room_id = ? AND starts_at IN ($placeholders)";
+            $existingParams = array_merge([$roomId], $starts);
+            if ($route === 'showtime_edit') {
+                $existingSql .= ' AND id <> ?';
+                $existingParams[] = (int) $_GET['id'];
+            }
+            $existingStmt = db()->prepare($existingSql);
+            $existingStmt->execute($existingParams);
+            $existingStarts = array_flip(array_map(static fn($row) => (string) $row['starts_at'], $existingStmt->fetchAll()));
+            $startsToInsert = array_values(array_filter($starts, static fn($startsAt) => !isset($existingStarts[$startsAt])));
+
             if ($route === 'showtime_new') {
                 $stmt = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-                foreach ($starts as $startsAt) {
+                foreach ($startsToInsert as $startsAt) {
                     $stmt->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $price, $halfPrice, $status]);
                 }
+                header('Location: index.php?route=showtimes&status=programada&created=' . count($startsToInsert) . '&skipped=' . count($existingStarts));
+                exit;
             } else {
+                if (!$startsToInsert && isset($existingStarts[$starts[0]])) {
+                    throw new RuntimeException('Já existe sessão nesta sala para este horário.');
+                }
+                $primaryStart = $startsToInsert[0] ?? $starts[0];
                 $stmt = db()->prepare('UPDATE showtimes SET movie_id=?, room_id=?, starts_at=?, audio_type=?, is_3d=?, price=?, half_price=?, status=? WHERE id=?');
-                $stmt->execute([$movieId, $roomId, $starts[0], $audioType, $is3d, $price, $halfPrice, $status, (int) $_GET['id']]);
+                $stmt->execute([$movieId, $roomId, $primaryStart, $audioType, $is3d, $price, $halfPrice, $status, (int) $_GET['id']]);
 
-                if (count($starts) > 1) {
+                if (count($startsToInsert) > 1) {
                     $insert = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-                    foreach (array_slice($starts, 1) as $startsAt) {
+                    foreach (array_slice($startsToInsert, 1) as $startsAt) {
                         $insert->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $price, $halfPrice, $status]);
                     }
                 }
+                header('Location: index.php?route=showtimes&status=programada&created=' . max(1, count($startsToInsert)) . '&skipped=' . count($existingStarts));
+                exit;
             }
-
-            redirect_to('showtimes');
         }
 
         layout('Sessão', function () use ($movies, $rooms, $showtime, $route) {
@@ -1607,6 +1670,19 @@ try {
 
                 <fieldset class="fieldset">
                     <legend>Horários de exibição</legend>
+                    <div class="columns compact">
+                        <label>Periodo inicial<input id="period-date-from" name="period_date_from" type="date"></label>
+                        <label>Periodo final<input id="period-date-to" name="period_date_to" type="date"></label>
+                        <label>Horarios do periodo<input id="period-times" name="period_times" placeholder="Ex: 14:00, 16:30, 20:30"></label>
+                    </div>
+                    <div class="weekday-picker" aria-label="Dias da semana">
+                        <?php foreach ([1 => 'Seg', 2 => 'Ter', 3 => 'Qua', 4 => 'Qui', 5 => 'Sex', 6 => 'Sab', 7 => 'Dom'] as $day => $label): ?>
+                            <label><input type="checkbox" name="period_weekdays[]" value="<?= $day ?>" checked><span><?= e($label) ?></span></label>
+                        <?php endforeach; ?>
+                    </div>
+                    <div class="toolbar">
+                        <button type="button" class="button" id="generate-period-showtimes">Gerar periodo</button>
+                    </div>
                     <div class="showtime-builder">
                         <label>Data<input id="showtime-date" type="date"></label>
                         <label>Horário<input id="showtime-time" type="time"></label>
@@ -1614,7 +1690,7 @@ try {
                     </div>
                     <div id="showtime-list" class="showtime-list" data-initial='<?= e(json_encode($showtime['starts_at'] ? [$showtime['starts_at']] : [])) ?>'></div>
                 </fieldset>
-                <script src="/assets/js/showtime-form.js"></script>
+                <script src="/assets/js/showtime-form.js?v=<?= (int) filemtime(__DIR__ . '/../assets/js/showtime-form.js') ?>"></script>
 
                 <button class="button primary" <?= !$movies || !$rooms ? 'disabled' : '' ?>>Salvar sessão</button>
             </form>
@@ -1771,12 +1847,10 @@ try {
             <?php endif; ?>
             <form method="get" class="panel form filters">
                 <input type="hidden" name="route" value="sales">
-                <input type="hidden" name="sale_code" value="">
                 <div class="columns compact">
-                    <label>Cancelar venda / ingresso<input name="cancel_code" value="" placeholder="Digite o numero impresso"></label>
                     <label>Data da sessão<input name="date" type="date" value="<?= e($date) ?>"></label>
                 </div>
-                <button class="button danger" type="submit" onclick="this.form.route.value='ticket_cancel'; this.form.sale_code.value=this.form.cancel_code.value;">Cancelar venda</button>
+                <a class="button danger" href="index.php?route=ticket_cancel">Cancelar venda</a>
                 <button class="button primary">Buscar sessões</button>
             </form>
             <div class="grid cards">

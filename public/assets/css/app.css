@@ -464,6 +464,33 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
     gap: 14px;
     align-items: end;
 }
+.weekday-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 10px 0 12px;
+}
+.weekday-picker label { margin: 0; }
+.weekday-picker input { position: absolute; opacity: 0; pointer-events: none; }
+.weekday-picker span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 34px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
+}
+.weekday-picker input:checked + span {
+    border-color: #f5c542;
+    background: #fff8db;
+    color: #17120f;
+}
 .showtime-list {
     display: grid;
     gap: 10px;
