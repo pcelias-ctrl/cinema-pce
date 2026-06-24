@@ -6,6 +6,23 @@
         });
     });
 
+    document.querySelectorAll('[data-open-modal]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const modal = document.getElementById(button.dataset.openModal || '');
+            if (modal && typeof modal.showModal === 'function') modal.showModal();
+        });
+    });
+    document.querySelectorAll('[data-close-modal]').forEach((button) => {
+        button.addEventListener('click', () => button.closest('dialog')?.close());
+    });
+    document.querySelectorAll('.movie-modal').forEach((modal) => {
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) modal.close();
+        });
+    });
+
     const banner = document.getElementById('cookie-banner');
     const storageKey = 'cinesys_cookie_consent';
     if (banner && !localStorage.getItem(storageKey)) banner.hidden = false;

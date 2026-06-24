@@ -66,6 +66,8 @@ final class PublicPortal
         self::ensureColumns($db, 'public_portal_settings', [
             'payment_gateway' => "ENUM('pagarme','infinitepay') NOT NULL DEFAULT 'pagarme' AFTER hold_minutes",
             'public_sale_cutoff_minutes' => 'SMALLINT UNSIGNED NOT NULL DEFAULT 45 AFTER hold_minutes',
+            'banner_mime' => 'VARCHAR(80) NULL AFTER public_sale_cutoff_minutes',
+            'banner_data' => 'LONGBLOB NULL AFTER banner_mime',
             'pagarme_webhook_username' => 'VARCHAR(190) NULL AFTER pagarme_webhook_secret_encrypted',
             'pagarme_webhook_password_encrypted' => 'TEXT NULL AFTER pagarme_webhook_username',
             'infinitepay_handle' => 'VARCHAR(190) NULL AFTER pagarme_webhook_password_encrypted',
@@ -102,6 +104,15 @@ final class PublicPortal
         }
         self::ensureColumns($db, 'movies', [
             'age_rating' => "ENUM('L','10','12','14','16','18') NOT NULL DEFAULT 'L' AFTER genre",
+            'is_coming_soon' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER active',
+        ]);
+        self::ensureColumns($db, 'rooms', [
+            'projection_laser' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER large_seats',
+            'dolby_sound' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER projection_laser',
+        ]);
+        self::ensureColumns($db, 'showtimes', [
+            'is_presale' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER is_3d',
+            'presale_starts_at' => 'DATETIME NULL AFTER is_presale',
         ]);
         $db->exec("UPDATE movies SET age_rating=CASE UPPER(TRIM(JSON_UNQUOTE(JSON_EXTRACT(technical_sheet,'$.classificacao')))) WHEN 'LIVRE' THEN 'L' WHEN 'L' THEN 'L' WHEN '10' THEN '10' WHEN '10 ANOS' THEN '10' WHEN '12' THEN '12' WHEN '12 ANOS' THEN '12' WHEN '14' THEN '14' WHEN '14 ANOS' THEN '14' WHEN '16' THEN '16' WHEN '16 ANOS' THEN '16' WHEN '18' THEN '18' WHEN '18 ANOS' THEN '18' ELSE age_rating END WHERE JSON_VALID(technical_sheet) AND JSON_EXTRACT(technical_sheet,'$.classificacao') IS NOT NULL");
         $gatewayColumn=$db->query("SHOW COLUMNS FROM public_portal_settings LIKE 'payment_gateway'")->fetch();
@@ -169,8 +180,8 @@ final class PublicPortal
     public static function settings(PDO $db): array
     {
         self::ensureSchema($db);
-        $defaults = ['sales_enabled'=>0,'hold_minutes'=>10,'public_sale_cutoff_minutes'=>45,'payment_gateway'=>'pagarme','pagarme_public_key'=>'','pagarme_secret_encrypted'=>'','pagarme_webhook_secret_encrypted'=>'','pagarme_webhook_username'=>'','pagarme_webhook_password_encrypted'=>'','infinitepay_handle'=>'','google_client_id'=>'','google_client_secret_encrypted'=>'','privacy_contact_email'=>'','cookie_policy_version'=>'1.0'];
-        $row = $db->query('SELECT * FROM public_portal_settings WHERE id=1')->fetch();
+        $defaults = ['sales_enabled'=>0,'hold_minutes'=>10,'public_sale_cutoff_minutes'=>45,'has_banner'=>0,'payment_gateway'=>'pagarme','pagarme_public_key'=>'','pagarme_secret_encrypted'=>'','pagarme_webhook_secret_encrypted'=>'','pagarme_webhook_username'=>'','pagarme_webhook_password_encrypted'=>'','infinitepay_handle'=>'','google_client_id'=>'','google_client_secret_encrypted'=>'','privacy_contact_email'=>'','cookie_policy_version'=>'1.0'];
+        $row = $db->query('SELECT id,sales_enabled,hold_minutes,public_sale_cutoff_minutes,banner_data IS NOT NULL has_banner,payment_gateway,pagarme_public_key,pagarme_secret_encrypted,pagarme_webhook_secret_encrypted,pagarme_webhook_username,pagarme_webhook_password_encrypted,infinitepay_handle,google_client_id,google_client_secret_encrypted,privacy_contact_email,cookie_policy_version FROM public_portal_settings WHERE id=1')->fetch();
         return array_merge($defaults, $row ?: []);
     }
 

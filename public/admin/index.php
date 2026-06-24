@@ -167,6 +167,24 @@ function save_product_image(array $file): ?array
     return ['mime' => $info['mime'], 'data' => $data];
 }
 
+function save_public_banner(array $file): ?array
+{
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) return null;
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('Falha no upload do banner.');
+    }
+    if (($file['size'] ?? 0) > 4 * 1024 * 1024) {
+        throw new RuntimeException('O banner deve ter no máximo 4 MB.');
+    }
+    $info = getimagesize($file['tmp_name']);
+    if (!$info || !in_array($info['mime'], ['image/jpeg', 'image/png', 'image/webp'], true)) {
+        throw new RuntimeException('O banner precisa ser JPG, PNG ou WEBP.');
+    }
+    $data = file_get_contents($file['tmp_name']);
+    if ($data === false) throw new RuntimeException('Não foi possível ler o banner enviado.');
+    return ['mime' => $info['mime'], 'data' => $data];
+}
+
 function rebuild_room_seats(int $roomId, array $seats): void
 {
     $pdo = db();
@@ -811,7 +829,7 @@ try {
     if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'ticket_receipt', 'ticket_cancel', 'ticket_print', 'sale_receipt_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
         ensure_product_tables();
     }
-    if ($route === 'public_settings') PublicPortal::ensureSchema(db());
+    if (in_array($route, ['public_settings', 'movies', 'movie_new', 'movie_edit', 'rooms', 'room_new', 'room_edit', 'showtimes', 'showtime_new', 'showtime_edit'], true)) PublicPortal::ensureSchema(db());
 
     if (($route === 'dashboard' || $route === '') && Auth::user()['role'] !== 'administrador') {
         redirect_to('sales');
@@ -929,8 +947,15 @@ try {
             $webhookEncrypted = $webhookPassword !== '' ? SettingCrypto::encrypt($webhookPassword) : ($settings['pagarme_webhook_password_encrypted'] ?: $settings['pagarme_webhook_secret_encrypted']);
             $googleEncrypted = $googleSecret !== '' ? SettingCrypto::encrypt($googleSecret) : $settings['google_client_secret_encrypted'];
             $gateway = in_array(($_POST['payment_gateway'] ?? 'pagarme'),['pagarme','infinitepay','mixed'],true)?$_POST['payment_gateway']:'pagarme';
+            $banner = save_public_banner($_FILES['banner'] ?? []);
             $stmt = db()->prepare('UPDATE public_portal_settings SET sales_enabled=?,hold_minutes=?,public_sale_cutoff_minutes=?,payment_gateway=?,pagarme_public_key=?,pagarme_secret_encrypted=?,pagarme_webhook_username=?,pagarme_webhook_password_encrypted=?,infinitepay_handle=?,google_client_id=?,google_client_secret_encrypted=?,privacy_contact_email=?,cookie_policy_version=? WHERE id=1');
             $stmt->execute([!empty($_POST['sales_enabled'])?1:0,max(5,min(30,(int)($_POST['hold_minutes']??10))),max(0,min(240,(int)($_POST['public_sale_cutoff_minutes']??45))),$gateway,trim($_POST['pagarme_public_key']??'')?:null,$pagarmeEncrypted?:null,trim($_POST['pagarme_webhook_username']??'')?:null,$webhookEncrypted?:null,ltrim(trim($_POST['infinitepay_handle']??''),'@')?:null,trim($_POST['google_client_id']??'')?:null,$googleEncrypted?:null,trim($_POST['privacy_contact_email']??'')?:null,trim($_POST['cookie_policy_version']??'1.0')?:'1.0']);
+            if ($banner) {
+                $bannerStmt = db()->prepare('UPDATE public_portal_settings SET banner_mime=?, banner_data=? WHERE id=1');
+                $bannerStmt->execute([$banner['mime'], $banner['data']]);
+            } elseif (!empty($_POST['remove_banner'])) {
+                db()->exec('UPDATE public_portal_settings SET banner_mime=NULL, banner_data=NULL WHERE id=1');
+            }
             $settings = PublicPortal::settings(db());
             $saved = true;
         }
@@ -940,11 +965,12 @@ try {
         layout('Venda Online', function() use($settings,$saved,$webhookUrl,$infiniteWebhookUrl){?>
             <div class="section-head"><div><h1>Venda Online</h1><p class="muted">Portal público, pagamentos e acesso Google.</p></div><a class="button" href="/" target="_blank">Abrir portal</a></div>
             <?php if($saved):?><p class="alert success">Configurações salvas.</p><?php endif;?>
-            <form method="post" class="form wide"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
+            <form method="post" enctype="multipart/form-data" class="form wide"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>">
                 <section class="panel"><div class="settings-title"><h2>Portal público</h2><label class="check-label"><input type="checkbox" name="sales_enabled" value="1" <?=$settings['sales_enabled']?'checked':''?>> Ativar pagamentos online</label></div><div class="columns"><label>Processamento dos pagamentos<select name="payment_gateway"><option value="mixed" <?=$settings['payment_gateway']==='mixed'?'selected':''?>>Mesclar: Pix InfinitePay + cartão Pagar.me</option><option value="pagarme" <?=$settings['payment_gateway']==='pagarme'?'selected':''?>>Somente Pagar.me</option><option value="infinitepay" <?=$settings['payment_gateway']==='infinitepay'?'selected':''?>>Somente InfinitePay</option></select></label><label>Reserva das poltronas (minutos)<input name="hold_minutes" type="number" min="5" max="30" value="<?=e($settings['hold_minutes'])?>"></label><label>Bloquear venda pública antes da sessão (minutos)<input name="public_sale_cutoff_minutes" type="number" min="0" max="240" value="<?=e($settings['public_sale_cutoff_minutes'] ?? 45)?>"><small>Exemplo: 45 bloqueia compras online faltando 45 minutos.</small></label><label>E-mail para privacidade<input name="privacy_contact_email" type="email" value="<?=e($settings['privacy_contact_email'])?>"></label><label>Versão da política de cookies<input name="cookie_policy_version" value="<?=e($settings['cookie_policy_version'])?>"></label></div></section>
                 <section class="panel"><div class="settings-title"><h2>Pagar.me</h2><span class="status-badge <?=($settings['pagarme_public_key']&&$settings['pagarme_secret_encrypted'])?'active':'inactive'?>"><?=($settings['pagarme_public_key']&&$settings['pagarme_secret_encrypted'])?'Configurado':'Pendente'?></span></div><?php if(str_starts_with((string)$settings['pagarme_public_key'],'pk_test_')):?><p class="alert warning"><strong>Ambiente de testes:</strong> cartões e Pix são simulados e não geram recebimentos reais. Para operar a loja, informe as chaves <code>pk_live</code> e <code>sk_live</code>.</p><?php endif;?><div class="columns"><label>Chave pública<input name="pagarme_public_key" value="<?=e($settings['pagarme_public_key'])?>" autocomplete="off"></label><label>Chave secreta<input name="pagarme_secret" type="password" autocomplete="new-password" placeholder="<?=$settings['pagarme_secret_encrypted']?'Configurada; deixe vazio para manter':''?>"></label><label>Usuário do webhook<input name="pagarme_webhook_username" value="<?=e($settings['pagarme_webhook_username'])?>" autocomplete="off"></label><label>Senha do webhook<input name="pagarme_webhook_password" type="password" autocomplete="new-password" placeholder="<?=$settings['pagarme_webhook_password_encrypted']?'Configurada; deixe vazio para manter':''?>"></label></div><p class="muted"><strong>URL do webhook:</strong> <?=e($webhookUrl)?><br>Cadastre esta URL, o usuário e a mesma senha no portal Pagar.me.</p></section>
                 <section class="panel"><div class="settings-title"><h2>InfinitePay</h2><span class="status-badge <?=$settings['infinitepay_handle']?'active':'inactive'?>"><?=$settings['infinitepay_handle']?'Configurado':'Pendente'?></span></div><div class="columns"><label>Handle / InfiniteTag<input name="infinitepay_handle" value="<?=e($settings['infinitepay_handle'])?>" autocomplete="off" placeholder="seu-handle"></label></div><p class="muted"><strong>Webhook automático:</strong> <?=e($infiniteWebhookUrl)?></p></section>
                 <section class="panel"><div class="settings-title"><h2>Google</h2><span class="status-badge <?=($settings['google_client_id']&&$settings['google_client_secret_encrypted'])?'active':'inactive'?>"><?=($settings['google_client_id']&&$settings['google_client_secret_encrypted'])?'Configurado':'Pendente'?></span></div><div class="columns"><label>Client ID<input name="google_client_id" value="<?=e($settings['google_client_id'])?>" autocomplete="off"></label><label>Client secret<input name="google_client_secret" type="password" autocomplete="new-password" placeholder="<?=$settings['google_client_secret_encrypted']?'Configurado; deixe vazio para manter':''?>"></label></div><p class="muted"><strong>URI de redirecionamento:</strong> <?=e(rtrim((string)config_value('app_url'),'/'))?>/?action=google_callback</p></section>
+                <section class="panel"><div class="settings-title"><h2>Banner de publicidade</h2><span class="status-badge <?=$settings['has_banner']?'active':'inactive'?>"><?=$settings['has_banner']?'Configurado':'Sem banner'?></span></div><div class="columns"><label>Imagem do banner<input name="banner" type="file" accept="image/jpeg,image/png,image/webp"><small>JPG, PNG ou WEBP, até 4 MB. Recomendado: horizontal.</small></label><?php if($settings['has_banner']):?><label class="check-label"><input type="checkbox" name="remove_banner" value="1"> Remover banner atual</label><div><img src="/?action=banner" alt="" style="max-width:320px;width:100%;border-radius:6px;border:1px solid #ddd"></div><?php endif;?></div></section>
                 <button class="button primary">Salvar configurações</button>
             </form>
         <?php });exit;
@@ -1233,7 +1259,7 @@ try {
 
     if ($route === 'movie_new' || $route === 'movie_edit') {
         Auth::requireAdmin();
-        $movie = ['title' => '', 'original_title' => '', 'synopsis' => '', 'trailer_url' => '', 'duration_minutes' => '', 'genre' => '', 'age_rating' => 'L', 'technical_sheet' => ''];
+        $movie = ['title' => '', 'original_title' => '', 'synopsis' => '', 'trailer_url' => '', 'duration_minutes' => '', 'genre' => '', 'age_rating' => 'L', 'technical_sheet' => '', 'is_coming_soon' => 0];
         if ($route === 'movie_edit') {
             $stmt = db()->prepare('SELECT * FROM movies WHERE id = ?');
             $stmt->execute([(int) $_GET['id']]);
@@ -1245,12 +1271,13 @@ try {
             $cover = save_movie_cover($_FILES['cover'] ?? []);
             $technicalSheet = technical_sheet_from_post();
             $ageRating = normalize_age_rating((string) ($_POST['age_rating'] ?? 'L'));
+            $isComingSoon = !empty($_POST['is_coming_soon']) ? 1 : 0;
             if ($route === 'movie_new') {
-                $stmt = db()->prepare('INSERT INTO movies (title, original_title, synopsis, trailer_url, cover_mime, cover_data, duration_minutes, genre, age_rating, technical_sheet) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-                $stmt->execute([$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], $cover['mime'] ?? null, $cover['data'] ?? null, (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet]);
+                $stmt = db()->prepare('INSERT INTO movies (title, original_title, synopsis, trailer_url, cover_mime, cover_data, duration_minutes, genre, age_rating, technical_sheet, is_coming_soon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt->execute([$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], $cover['mime'] ?? null, $cover['data'] ?? null, (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet, $isComingSoon]);
             } else {
-                $sql = 'UPDATE movies SET title=?, original_title=?, synopsis=?, trailer_url=?, duration_minutes=?, genre=?, age_rating=?, technical_sheet=?';
-                $params = [$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet];
+                $sql = 'UPDATE movies SET title=?, original_title=?, synopsis=?, trailer_url=?, duration_minutes=?, genre=?, age_rating=?, technical_sheet=?, is_coming_soon=?';
+                $params = [$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet, $isComingSoon];
                 if ($cover) {
                     $sql .= ', cover_mime=?, cover_data=?';
                     $params[] = $cover['mime'];
@@ -1282,6 +1309,7 @@ try {
                         </select>
                     </label>
                     <label>Trailer<input name="trailer_url" type="url" value="<?= input_value('trailer_url', $movie) ?>"></label>
+                    <label class="check-label"><input type="checkbox" name="is_coming_soon" value="1" <?= !empty($movie['is_coming_soon']) ? 'checked' : '' ?>> Próximas estreias</label>
                 </div>
                 <label>Sinopse<textarea name="synopsis" rows="5" required><?= e($movie['synopsis']) ?></textarea></label>
                 <fieldset class="fieldset">
@@ -1512,13 +1540,14 @@ try {
         Auth::requireAdmin();
         $movies = db()->query('SELECT id, title FROM movies WHERE active = 1 ORDER BY title')->fetchAll();
         $rooms = db()->query('SELECT id, name FROM rooms WHERE active = 1 ORDER BY name')->fetchAll();
-        $showtime = ['movie_id' => '', 'room_id' => '', 'audio_type' => 'dublado', 'is_3d' => 0, 'starts_at' => '', 'price' => '', 'half_price' => '', 'status' => 'programada'];
+        $showtime = ['movie_id' => '', 'room_id' => '', 'audio_type' => 'dublado', 'is_3d' => 0, 'is_presale' => 0, 'presale_starts_at' => '', 'starts_at' => '', 'price' => '', 'half_price' => '', 'status' => 'programada'];
 
         if ($route === 'showtime_edit') {
             $stmt = db()->prepare('SELECT * FROM showtimes WHERE id = ?');
             $stmt->execute([(int) $_GET['id']]);
             $showtime = $stmt->fetch() ?: $showtime;
             $showtime['starts_at'] = $showtime['starts_at'] ? datetime_local_value($showtime['starts_at']) : '';
+            $showtime['presale_starts_at'] = $showtime['presale_starts_at'] ? datetime_local_value($showtime['presale_starts_at']) : '';
         }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -1527,6 +1556,11 @@ try {
             $roomId = (int) ($_POST['room_id'] ?? 0);
             $audioType = ($_POST['audio_type'] ?? 'dublado') === 'legendado' ? 'legendado' : 'dublado';
             $is3d = !empty($_POST['is_3d']) ? 1 : 0;
+            $isPresale = !empty($_POST['is_presale']) ? 1 : 0;
+            $presaleStartsAt = $isPresale ? normalize_datetime_local($_POST['presale_starts_at'] ?? '') : null;
+            if ($isPresale && !$presaleStartsAt) {
+                throw new RuntimeException('Informe quando a pré-venda será liberada.');
+            }
             $price = money_to_decimal($_POST['price'] ?? '0');
             $halfPrice = money_to_decimal($_POST['half_price'] ?? '0');
             if ($price <= 0 || $halfPrice <= 0) {
@@ -1599,9 +1633,9 @@ try {
             $startsToInsert = array_values(array_filter($starts, static fn($startsAt) => !isset($existingStarts[$startsAt])));
 
             if ($route === 'showtime_new') {
-                $stmt = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, is_presale, presale_starts_at, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
                 foreach ($startsToInsert as $startsAt) {
-                    $stmt->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $price, $halfPrice, $status]);
+                    $stmt->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $isPresale, $presaleStartsAt, $price, $halfPrice, $status]);
                 }
                 header('Location: index.php?route=showtimes&status=programada&created=' . count($startsToInsert) . '&skipped=' . count($existingStarts));
                 exit;
@@ -1610,13 +1644,13 @@ try {
                     throw new RuntimeException('Já existe sessão nesta sala para este horário.');
                 }
                 $primaryStart = $startsToInsert[0] ?? $starts[0];
-                $stmt = db()->prepare('UPDATE showtimes SET movie_id=?, room_id=?, starts_at=?, audio_type=?, is_3d=?, price=?, half_price=?, status=? WHERE id=?');
-                $stmt->execute([$movieId, $roomId, $primaryStart, $audioType, $is3d, $price, $halfPrice, $status, (int) $_GET['id']]);
+                $stmt = db()->prepare('UPDATE showtimes SET movie_id=?, room_id=?, starts_at=?, audio_type=?, is_3d=?, is_presale=?, presale_starts_at=?, price=?, half_price=?, status=? WHERE id=?');
+                $stmt->execute([$movieId, $roomId, $primaryStart, $audioType, $is3d, $isPresale, $presaleStartsAt, $price, $halfPrice, $status, (int) $_GET['id']]);
 
                 if (count($startsToInsert) > 1) {
-                    $insert = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+                    $insert = db()->prepare('INSERT INTO showtimes (movie_id, room_id, starts_at, audio_type, is_3d, is_presale, presale_starts_at, price, half_price, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
                     foreach (array_slice($startsToInsert, 1) as $startsAt) {
-                        $insert->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $price, $halfPrice, $status]);
+                        $insert->execute([$movieId, $roomId, $startsAt, $audioType, $is3d, $isPresale, $presaleStartsAt, $price, $halfPrice, $status]);
                     }
                 }
                 header('Location: index.php?route=showtimes&status=programada&created=' . max(1, count($startsToInsert)) . '&skipped=' . count($existingStarts));
@@ -1657,6 +1691,8 @@ try {
                         </select>
                     </label>
                     <label class="check-label"><input type="checkbox" name="is_3d" value="1" <?= !empty($showtime['is_3d']) ? 'checked' : '' ?>> Sessão com óculos 3D</label>
+                    <label class="check-label"><input type="checkbox" name="is_presale" value="1" <?= !empty($showtime['is_presale']) ? 'checked' : '' ?>> Pré-Venda</label>
+                    <label>Liberação da pré-venda<input name="presale_starts_at" type="datetime-local" value="<?= e($showtime['presale_starts_at'] ?? '') ?>"></label>
                     <label>Valor inteira<input name="price" inputmode="decimal" placeholder="Ex: 30,00" value="<?= e($showtime['price'] !== '' ? number_format((float) $showtime['price'], 2, ',', '.') : '') ?>" required></label>
                     <label>Valor meia<input name="half_price" inputmode="decimal" placeholder="Ex: 15,00" value="<?= e($showtime['half_price'] !== '' ? number_format((float) $showtime['half_price'], 2, ',', '.') : '') ?>" required></label>
                     <label>Status
@@ -2696,7 +2732,7 @@ try {
 
     if ($route === 'room_new' || $route === 'room_edit') {
         Auth::requireAdmin();
-        $room = ['name' => '', 'capacity' => '', 'normal_seats' => '', 'large_seats' => '', 'screen_config' => '{}', 'seat_layout' => '[]'];
+        $room = ['name' => '', 'capacity' => '', 'normal_seats' => '', 'large_seats' => '', 'projection_laser' => 0, 'dolby_sound' => 0, 'screen_config' => '{}', 'seat_layout' => '[]'];
         if ($route === 'room_edit') {
             $stmt = db()->prepare('SELECT * FROM rooms WHERE id = ?');
             $stmt->execute([(int) $_GET['id']]);
@@ -2733,13 +2769,13 @@ try {
             db()->beginTransaction();
             try {
                 if ($route === 'room_new') {
-                    $stmt = db()->prepare('INSERT INTO rooms (name, capacity, normal_seats, large_seats, screen_config, seat_layout) VALUES (?, ?, ?, ?, ?, ?)');
-                    $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], json_encode($screen), json_encode($layout)]);
+                    $stmt = db()->prepare('INSERT INTO rooms (name, capacity, normal_seats, large_seats, projection_laser, dolby_sound, screen_config, seat_layout) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+                    $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], !empty($_POST['projection_laser']) ? 1 : 0, !empty($_POST['dolby_sound']) ? 1 : 0, json_encode($screen), json_encode($layout)]);
                     $roomId = (int) db()->lastInsertId();
                 } else {
                     $roomId = (int) $_GET['id'];
-                    $stmt = db()->prepare('UPDATE rooms SET name=?, capacity=?, normal_seats=?, large_seats=?, screen_config=?, seat_layout=? WHERE id=?');
-                    $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], json_encode($screen), json_encode($layout), $roomId]);
+                    $stmt = db()->prepare('UPDATE rooms SET name=?, capacity=?, normal_seats=?, large_seats=?, projection_laser=?, dolby_sound=?, screen_config=?, seat_layout=? WHERE id=?');
+                    $stmt->execute([$_POST['name'], (int) $_POST['capacity'], (int) $_POST['normal_seats'], (int) $_POST['large_seats'], !empty($_POST['projection_laser']) ? 1 : 0, !empty($_POST['dolby_sound']) ? 1 : 0, json_encode($screen), json_encode($layout), $roomId]);
                 }
                 rebuild_room_seats($roomId, $layout);
                 db()->commit();
@@ -2762,6 +2798,8 @@ try {
                     <label>Capacidade<input id="capacity" name="capacity" type="number" min="1" value="<?= input_value('capacity', $room) ?>" required></label>
                     <label>Poltronas normais<input id="normal-seats" name="normal_seats" type="number" min="0" value="<?= input_value('normal_seats', $room) ?>" required></label>
                     <label>Poltronas grandes<input id="large-seats" name="large_seats" type="number" min="0" value="<?= input_value('large_seats', $room) ?>" required></label>
+                    <label class="check-label"><input type="checkbox" name="projection_laser" value="1" <?= !empty($room['projection_laser']) ? 'checked' : '' ?>> Projeção Laser</label>
+                    <label class="check-label"><input type="checkbox" name="dolby_sound" value="1" <?= !empty($room['dolby_sound']) ? 'checked' : '' ?>> Som Dolby</label>
                     <label>Corredores<input id="rows" type="text" placeholder="Ex: A,B,C"></label>
                     <label>Por corredor<input id="seats-per-row" type="number" min="1" placeholder="Ex: 20"></label>
                 </div>
