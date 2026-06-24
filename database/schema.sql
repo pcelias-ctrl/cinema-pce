@@ -53,6 +53,8 @@ CREATE TABLE movies (
     trailer_url VARCHAR(500) NULL,
     cover_mime VARCHAR(80) NULL,
     cover_data LONGBLOB NULL,
+    promo_banner_mime VARCHAR(80) NULL,
+    promo_banner_data LONGBLOB NULL,
     duration_minutes SMALLINT UNSIGNED NOT NULL,
     genre VARCHAR(120) NOT NULL,
     age_rating ENUM('L','10','12','14','16','18') NOT NULL DEFAULT 'L',

@@ -105,6 +105,8 @@ final class PublicPortal
         self::ensureColumns($db, 'movies', [
             'age_rating' => "ENUM('L','10','12','14','16','18') NOT NULL DEFAULT 'L' AFTER genre",
             'is_coming_soon' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER active',
+            'promo_banner_mime' => 'VARCHAR(80) NULL AFTER cover_data',
+            'promo_banner_data' => 'LONGBLOB NULL AFTER promo_banner_mime',
         ]);
         self::ensureColumns($db, 'rooms', [
             'projection_laser' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER large_seats',

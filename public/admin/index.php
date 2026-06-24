@@ -109,26 +109,36 @@ function input_value(string $key, array $source = []): string
     return e($source[$key] ?? '');
 }
 
-function save_movie_cover(array $file): ?array
+function save_movie_image(array $file, string $label): ?array
 {
     if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
         return null;
     }
     if ($file['error'] !== UPLOAD_ERR_OK) {
-        throw new RuntimeException('Falha no upload da capa.');
+        throw new RuntimeException('Falha no upload de ' . $label . '.');
     }
 
     $info = getimagesize($file['tmp_name']);
     if (!$info || !in_array($info['mime'], ['image/jpeg', 'image/png', 'image/webp'], true)) {
-        throw new RuntimeException('A capa precisa ser JPG, PNG ou WEBP.');
+        throw new RuntimeException('A imagem de ' . $label . ' precisa ser JPG, PNG ou WEBP.');
     }
 
     $data = file_get_contents($file['tmp_name']);
     if ($data === false) {
-        throw new RuntimeException('Não foi possível ler a capa enviada.');
+        throw new RuntimeException('Nao foi possivel ler a imagem de ' . $label . ' enviada.');
     }
 
     return ['mime' => $info['mime'], 'data' => $data];
+}
+
+function save_movie_cover(array $file): ?array
+{
+    return save_movie_image($file, 'capa');
+}
+
+function save_movie_promo_banner(array $file): ?array
+{
+    return save_movie_image($file, 'banner');
 }
 
 function save_cinema_logo(array $file): ?array
@@ -992,6 +1002,20 @@ try {
         exit;
     }
 
+    if ($route === 'movie_banner') {
+        $stmt = db()->prepare('SELECT promo_banner_mime, promo_banner_data FROM movies WHERE id = ? AND promo_banner_data IS NOT NULL LIMIT 1');
+        $stmt->execute([(int) ($_GET['id'] ?? 0)]);
+        $banner = $stmt->fetch();
+        if (!$banner) {
+            http_response_code(404);
+            exit;
+        }
+        header('Content-Type: ' . $banner['promo_banner_mime']);
+        header('Cache-Control: public, max-age=86400');
+        echo $banner['promo_banner_data'];
+        exit;
+    }
+
     if ($route === 'product_image') {
         ensure_product_tables();
         $stmt = db()->prepare('SELECT image_mime, image_data FROM products WHERE id = ? AND image_data IS NOT NULL LIMIT 1');
@@ -1259,7 +1283,7 @@ try {
 
     if ($route === 'movie_new' || $route === 'movie_edit') {
         Auth::requireAdmin();
-        $movie = ['title' => '', 'original_title' => '', 'synopsis' => '', 'trailer_url' => '', 'duration_minutes' => '', 'genre' => '', 'age_rating' => 'L', 'technical_sheet' => '', 'is_coming_soon' => 0];
+        $movie = ['title' => '', 'original_title' => '', 'synopsis' => '', 'trailer_url' => '', 'duration_minutes' => '', 'genre' => '', 'age_rating' => 'L', 'technical_sheet' => '', 'is_coming_soon' => 0, 'promo_banner_data' => null];
         if ($route === 'movie_edit') {
             $stmt = db()->prepare('SELECT * FROM movies WHERE id = ?');
             $stmt->execute([(int) $_GET['id']]);
@@ -1269,12 +1293,13 @@ try {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
             $cover = save_movie_cover($_FILES['cover'] ?? []);
+            $promoBanner = save_movie_promo_banner($_FILES['promo_banner'] ?? []);
             $technicalSheet = technical_sheet_from_post();
             $ageRating = normalize_age_rating((string) ($_POST['age_rating'] ?? 'L'));
             $isComingSoon = !empty($_POST['is_coming_soon']) ? 1 : 0;
             if ($route === 'movie_new') {
-                $stmt = db()->prepare('INSERT INTO movies (title, original_title, synopsis, trailer_url, cover_mime, cover_data, duration_minutes, genre, age_rating, technical_sheet, is_coming_soon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-                $stmt->execute([$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], $cover['mime'] ?? null, $cover['data'] ?? null, (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet, $isComingSoon]);
+                $stmt = db()->prepare('INSERT INTO movies (title, original_title, synopsis, trailer_url, cover_mime, cover_data, promo_banner_mime, promo_banner_data, duration_minutes, genre, age_rating, technical_sheet, is_coming_soon) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt->execute([$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], $cover['mime'] ?? null, $cover['data'] ?? null, $promoBanner['mime'] ?? null, $promoBanner['data'] ?? null, (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet, $isComingSoon]);
             } else {
                 $sql = 'UPDATE movies SET title=?, original_title=?, synopsis=?, trailer_url=?, duration_minutes=?, genre=?, age_rating=?, technical_sheet=?, is_coming_soon=?';
                 $params = [$_POST['title'], $_POST['original_title'], $_POST['synopsis'], $_POST['trailer_url'], (int) $_POST['duration_minutes'], $_POST['genre'], $ageRating, $technicalSheet, $isComingSoon];
@@ -1282,6 +1307,11 @@ try {
                     $sql .= ', cover_mime=?, cover_data=?';
                     $params[] = $cover['mime'];
                     $params[] = $cover['data'];
+                }
+                if ($promoBanner) {
+                    $sql .= ', promo_banner_mime=?, promo_banner_data=?';
+                    $params[] = $promoBanner['mime'];
+                    $params[] = $promoBanner['data'];
                 }
                 $sql .= ' WHERE id=?';
                 $params[] = (int) $_GET['id'];
@@ -1324,6 +1354,10 @@ try {
                     </div>
                 </fieldset>
                 <label>Capa do filme<input name="cover" type="file" accept="image/jpeg,image/png,image/webp"></label>
+                <label>Banner horizontal de prÃ©-venda/prÃ©-estreia<input name="promo_banner" type="file" accept="image/jpeg,image/png,image/webp"><small>Use imagem larga e baixa. Recomendado: 1200x300 ou proporÃ§Ã£o parecida.</small></label>
+                <?php if (!empty($movie['promo_banner_data'])): ?>
+                    <div class="movie-banner-current"><img src="index.php?route=movie_banner&id=<?= (int) $movie['id'] ?>" alt="Banner atual"></div>
+                <?php endif; ?>
                 <button class="button primary">Salvar filme</button>
             </form>
             <?php

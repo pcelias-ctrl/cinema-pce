@@ -433,6 +433,8 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .table-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .table-actions form { margin: 0; }
 .table-actions .button { min-height: 30px; padding: 0 9px; font-size: 12px; }
+.movie-banner-current { max-width: 520px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #111; }
+.movie-banner-current img { width: 100%; aspect-ratio: 4/1; display: block; object-fit: cover; }
 .category-name { display: inline-flex; align-items: center; gap: 7px; }
 .category-name svg { width: 18px; height: 18px; color: var(--accent); }
 .group-row td {

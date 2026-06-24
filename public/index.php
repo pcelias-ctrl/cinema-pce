@@ -174,6 +174,17 @@ if ($action === 'cover') {
     exit;
 }
 
+if ($action === 'movie_banner') {
+    $stmt = $db->prepare('SELECT promo_banner_mime,promo_banner_data FROM movies WHERE id=? AND promo_banner_data IS NOT NULL');
+    $stmt->execute([(int) ($_GET['id'] ?? 0)]);
+    $banner = $stmt->fetch();
+    if (!$banner) { http_response_code(404); exit; }
+    header('Content-Type: ' . $banner['promo_banner_mime']);
+    header('Cache-Control: public, max-age=86400');
+    echo $banner['promo_banner_data'];
+    exit;
+}
+
 if ($action === 'product_image') {
     $stmt = $db->prepare('SELECT image_mime,image_data FROM products WHERE id=? AND image_data IS NOT NULL');
     $stmt->execute([(int) ($_GET['id'] ?? 0)]);
@@ -486,26 +497,37 @@ $products = [];
 $presaleMovies = [];
 $comingSoonMovies = [];
 if ($action === 'catalog') {
-    $comingStmt = $db->query("SELECT id movie_id,title,genre,duration_minutes,synopsis,age_rating,cover_data IS NOT NULL has_cover FROM movies WHERE active=1 AND is_coming_soon=1 ORDER BY title LIMIT 12");
+    $comingStmt = $db->query("SELECT id movie_id,title,genre,duration_minutes,synopsis,age_rating,cover_data IS NOT NULL has_cover,promo_banner_data IS NOT NULL has_promo_banner FROM movies WHERE active=1 AND is_coming_soon=1 ORDER BY title LIMIT 12");
     $comingSoonMovies = $comingStmt->fetchAll();
+    $presaleStmt = $db->prepare("SELECT showtimes.id,showtimes.starts_at,showtimes.audio_type,showtimes.is_3d,showtimes.is_presale,showtimes.presale_starts_at,showtimes.price,showtimes.half_price,
+        movies.id movie_id,movies.title,movies.original_title,movies.genre,movies.duration_minutes,movies.synopsis,movies.trailer_url,movies.age_rating,movies.technical_sheet,movies.cover_data IS NOT NULL has_cover,movies.promo_banner_data IS NOT NULL has_promo_banner,
+        rooms.name room_name,rooms.projection_laser,rooms.dolby_sound,
+        (SELECT COUNT(*) FROM room_seats WHERE room_id=rooms.id AND unavailable=0) capacity,
+        (SELECT COUNT(*) FROM tickets WHERE showtime_id=showtimes.id AND status IN ('reservado','vendido')) sold,
+        (SELECT COUNT(*) FROM public_seat_holds WHERE showtime_id=showtimes.id AND expires_at>NOW()) held
+        FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id
+        WHERE showtimes.status='programada' AND movies.active=1 AND rooms.active=1
+        AND showtimes.is_presale=1 AND DATE(COALESCE(showtimes.presale_starts_at,showtimes.starts_at))<=?
+        AND showtimes.starts_at>? ORDER BY showtimes.presale_starts_at ASC,movies.title,showtimes.starts_at");
+    $presaleStmt->execute([$selectedDate, $publicSaleCutoffAt]);
+    foreach ($presaleStmt->fetchAll() as $session) {
+        $movieId = (int) $session['movie_id'];
+        $session['buy_allowed'] = empty($session['presale_starts_at']) || strtotime((string)$session['presale_starts_at']) <= time();
+        if (!isset($presaleMovies[$movieId])) $presaleMovies[$movieId] = ['info' => $session, 'sessions' => []];
+        $presaleMovies[$movieId]['sessions'][] = $session;
+    }
     $stmt = $db->prepare("SELECT showtimes.id,showtimes.starts_at,showtimes.audio_type,showtimes.is_3d,showtimes.is_presale,showtimes.presale_starts_at,showtimes.price,showtimes.half_price,
-        movies.id movie_id,movies.title,movies.original_title,movies.genre,movies.duration_minutes,movies.synopsis,movies.trailer_url,movies.age_rating,movies.technical_sheet,movies.cover_data IS NOT NULL has_cover,
+        movies.id movie_id,movies.title,movies.original_title,movies.genre,movies.duration_minutes,movies.synopsis,movies.trailer_url,movies.age_rating,movies.technical_sheet,movies.cover_data IS NOT NULL has_cover,movies.promo_banner_data IS NOT NULL has_promo_banner,
         rooms.name room_name,rooms.projection_laser,rooms.dolby_sound,
         (SELECT COUNT(*) FROM room_seats WHERE room_id=rooms.id AND unavailable=0) capacity,
         (SELECT COUNT(*) FROM tickets WHERE showtime_id=showtimes.id AND status IN ('reservado','vendido')) sold,
         (SELECT COUNT(*) FROM public_seat_holds WHERE showtime_id=showtimes.id AND expires_at>NOW()) held
         FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id
         WHERE showtimes.status='programada' AND movies.active=1 AND rooms.active=1 AND DATE(showtimes.starts_at)=?
-        AND showtimes.starts_at>? ORDER BY movies.title,showtimes.starts_at");
+        AND showtimes.starts_at>? AND showtimes.is_presale=0 ORDER BY movies.title,showtimes.starts_at");
     $stmt->execute([$selectedDate, $publicSaleCutoffAt]);
     foreach ($stmt->fetchAll() as $session) {
         $movieId = (int) $session['movie_id'];
-        $session['buy_allowed'] = empty($session['is_presale']) || empty($session['presale_starts_at']) || strtotime((string)$session['presale_starts_at']) <= time();
-        if (!empty($session['is_presale'])) {
-            if (!isset($presaleMovies[$movieId])) $presaleMovies[$movieId] = ['info' => $session, 'sessions' => []];
-            $presaleMovies[$movieId]['sessions'][] = $session;
-            continue;
-        }
         if (!isset($movies[$movieId])) $movies[$movieId] = ['info' => $session, 'sessions' => []];
         $movies[$movieId]['sessions'][] = $session;
     }
@@ -575,7 +597,7 @@ public_layout($action === 'catalog' ? 'Ingressos' : 'Minha conta', $cinema, $cus
         <section class="catalog-heading"><div><span class="eyebrow">Programação</span><h1>Escolha sua sessão</h1><p>Selecione o filme, horário e poltronas.</p></div><?php if($customer):?><span class="customer-chip">Olá, <?=e(explode(' ',$customer['name'])[0])?></span><?php endif;?></section>
         <?php if(!empty($portalSettings['has_banner'])):?><section class="ad-banner"><img src="/?action=banner" alt="Publicidade"></section><?php endif;?>
         <?php if($presaleMovies):?>
-            <section class="presale-strip"><div class="section-strip"><span class="eyebrow">Pré-venda</span><h2>Garanta antes da estreia</h2></div><div class="presale-grid"><?php foreach($presaleMovies as $movie):$info=$movie['info'];?><article class="presale-card"><?php if($info['has_cover']):?><button type="button" class="poster poster-button" data-open-modal="movie-modal-<?=(int)$info['movie_id']?>" aria-label="Ver detalhes de <?=e($info['title'])?>"><img src="/?action=cover&id=<?=(int)$info['movie_id']?>" alt="Capa de <?=e($info['title'])?>"></button><?php endif;?><div><button type="button" class="movie-open-button" data-open-modal="movie-modal-<?=(int)$info['movie_id']?>"><span><?=e($info['title'])?></span><?=public_age_badge($info['age_rating'])?></button><p><?=e($info['genre'])?> · <?=(int)$info['duration_minutes']?> min</p><div class="session-groups"><?php foreach($movie['sessions'] as $session):$available=max(0,(int)$session['capacity']-(int)$session['sold']-(int)$session['held']);$canBuy=!empty($session['buy_allowed'])&&$available>0;?><a class="session-button <?=$canBuy?'':'sold-out'?>" href="<?=$canBuy?'/?action=seats&showtime_id='.(int)$session['id']:'#'?>"><strong><?=e(date('H:i',strtotime($session['starts_at'])))?></strong><span><?=e(ucfirst($session['audio_type']))?></span><span class="format-badges"><?=public_session_format_badges($session)?></span><small><?=$canBuy?$available.' lugares':'Libera em '.e(date('d/m H:i',strtotime((string)$session['presale_starts_at'])))?></small><?php if($canBuy):?><em>Comprar</em><?php endif;?></a><?php endforeach;?></div></div></article><?=public_movie_modal($info,$movie['sessions'])?><?php endforeach;?></div></section>
+            <section class="presale-strip"><div class="section-strip"><span class="eyebrow">Pré-venda</span><h2>Garanta antes da estreia</h2></div><div class="presale-grid"><?php foreach($presaleMovies as $movie):$info=$movie['info'];?><article class="presale-card"><?php if(!empty($info['has_promo_banner'])||$info['has_cover']):?><button type="button" class="presale-banner-button" data-open-modal="movie-modal-<?=(int)$info['movie_id']?>" aria-label="Ver detalhes de <?=e($info['title'])?>"><img src="<?=$info['has_promo_banner']?'/?action=movie_banner&id='.(int)$info['movie_id']:'/?action=cover&id='.(int)$info['movie_id']?>" alt="Banner de <?=e($info['title'])?>"></button><?php endif;?><div><button type="button" class="movie-open-button" data-open-modal="movie-modal-<?=(int)$info['movie_id']?>"><span><?=e($info['title'])?></span><?=public_age_badge($info['age_rating'])?></button><p><?=e($info['genre'])?> · <?=(int)$info['duration_minutes']?> min</p><div class="session-groups"><?php foreach($movie['sessions'] as $session):$available=max(0,(int)$session['capacity']-(int)$session['sold']-(int)$session['held']);$canBuy=!empty($session['buy_allowed'])&&$available>0;?><a class="session-button <?=$canBuy?'':'sold-out'?>" href="<?=$canBuy?'/?action=seats&showtime_id='.(int)$session['id']:'#'?>"><strong><?=e(date('H:i',strtotime($session['starts_at'])))?></strong><span><?=e(ucfirst($session['audio_type']))?></span><span class="format-badges"><?=public_session_format_badges($session)?></span><small><?=$canBuy?$available.' lugares':'Libera em '.e(date('d/m H:i',strtotime((string)$session['presale_starts_at'])))?></small><?php if($canBuy):?><em>Comprar</em><?php endif;?></a><?php endforeach;?></div></div></article><?=public_movie_modal($info,$movie['sessions'])?><?php endforeach;?></div></section>
         <?php endif;?>
         <?php if($comingSoonMovies):?>
             <section class="coming-soon"><div class="section-strip"><span class="eyebrow">Próximas estreias</span><h2>Em breve</h2></div><div class="coming-rail"><?php foreach($comingSoonMovies as $movie):?><article><?php if($movie['has_cover']):?><img src="/?action=cover&id=<?=(int)$movie['movie_id']?>" alt="Capa de <?=e($movie['title'])?>"><?php else:?><div class="poster-placeholder">SEM CAPA</div><?php endif;?><div><div class="movie-title-line"><h3><?=e($movie['title'])?></h3><?=public_age_badge($movie['age_rating'])?></div><p><?=e($movie['genre'])?> · <?=(int)$movie['duration_minutes']?> min</p></div></article><?php endforeach;?></div></section>
