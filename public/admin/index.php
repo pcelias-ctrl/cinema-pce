@@ -1363,6 +1363,46 @@ try {
 
     if ($route === 'showtimes') {
         Auth::requireAdmin();
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            $action = $_POST['action'] ?? '';
+            $showtimeId = (int) ($_POST['showtime_id'] ?? 0);
+            if ($showtimeId <= 0) {
+                header('Location: index.php?route=showtimes&error=invalid');
+                exit;
+            }
+
+            if ($action === 'close') {
+                $stmt = db()->prepare("UPDATE showtimes SET status = 'encerrada' WHERE id = ?");
+                $stmt->execute([$showtimeId]);
+                header('Location: index.php?route=showtimes&closed=1');
+                exit;
+            }
+
+            if ($action === 'delete') {
+                $stmt = db()->prepare('SELECT COUNT(*) FROM tickets WHERE showtime_id = ?');
+                $stmt->execute([$showtimeId]);
+                if ((int) $stmt->fetchColumn() > 0) {
+                    header('Location: index.php?route=showtimes&error=has_sales');
+                    exit;
+                }
+                $stmt = db()->prepare('SELECT COUNT(*) FROM public_orders WHERE showtime_id = ?');
+                $stmt->execute([$showtimeId]);
+                if ((int) $stmt->fetchColumn() > 0) {
+                    header('Location: index.php?route=showtimes&error=has_sales');
+                    exit;
+                }
+                db()->prepare('DELETE FROM public_seat_holds WHERE showtime_id = ?')->execute([$showtimeId]);
+                db()->prepare('DELETE FROM admin_seat_holds WHERE showtime_id = ?')->execute([$showtimeId]);
+                db()->prepare('DELETE FROM showtimes WHERE id = ?')->execute([$showtimeId]);
+                header('Location: index.php?route=showtimes&deleted=1');
+                exit;
+            }
+
+            header('Location: index.php?route=showtimes&error=invalid_action');
+            exit;
+        }
+
         $filters = [
             'q' => trim($_GET['q'] ?? ''),
             'date_from' => trim($_GET['date_from'] ?? ''),
@@ -1419,11 +1459,13 @@ try {
         }
 
         $sql =
-            'SELECT showtimes.*, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name
+            "SELECT showtimes.*, movies.title movie_title, movies.cover_data IS NOT NULL has_cover, rooms.name room_name,
+                (SELECT COUNT(*) FROM tickets WHERE tickets.showtime_id = showtimes.id) ticket_count,
+                (SELECT COUNT(*) FROM public_orders WHERE public_orders.showtime_id = showtimes.id) public_order_count
              FROM showtimes
              INNER JOIN movies ON movies.id = showtimes.movie_id
              INNER JOIN rooms ON rooms.id = showtimes.room_id
-             ' . ($where ? 'WHERE ' . implode(' AND ', $where) : '') . '
+             " . ($where ? 'WHERE ' . implode(' AND ', $where) : '') . '
              ORDER BY ' . $orderBy;
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
@@ -1438,6 +1480,10 @@ try {
             <?php if (isset($_GET['created'])): ?>
                 <p class="alert success"><?= (int) $_GET['created'] ?> sessao(oes) criada(s). <?= (int) ($_GET['skipped'] ?? 0) ?> horario(s) ignorado(s) por ja existir na mesma sala.</p>
             <?php endif; ?>
+            <?php if (isset($_GET['closed'])): ?><p class="alert success">Sessão encerrada.</p><?php endif; ?>
+            <?php if (isset($_GET['deleted'])): ?><p class="alert success">Sessão excluída.</p><?php endif; ?>
+            <?php if (($_GET['error'] ?? '') === 'has_sales'): ?><p class="alert">Esta sessão já possui vendas e não pode ser excluída.</p><?php endif; ?>
+            <?php if (in_array(($_GET['error'] ?? ''), ['invalid', 'invalid_action'], true)): ?><p class="alert">Não foi possível executar a ação solicitada.</p><?php endif; ?>
             <form method="get" class="panel form filters">
                 <input type="hidden" name="route" value="showtimes">
                 <div class="columns compact">
@@ -1522,7 +1568,27 @@ try {
                             <td>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></td>
                             <td>R$ <?= e(number_format((float) ($showtime['half_price'] ?? $showtime['price'] / 2), 2, ',', '.')) ?></td>
                             <td><?= e($showtime['status']) ?></td>
-                            <td><a href="index.php?route=showtime_edit&id=<?= (int) $showtime['id'] ?>">Editar</a></td>
+                            <td>
+                                <div class="table-actions">
+                                    <a class="button" href="index.php?route=showtime_edit&id=<?= (int) $showtime['id'] ?>">Editar</a>
+                                    <?php if ($showtime['status'] !== 'encerrada'): ?>
+                                        <form method="post" onsubmit="return confirm('Encerrar esta sessão? Ela deixará de aparecer para venda.')">
+                                            <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                                            <input type="hidden" name="action" value="close">
+                                            <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
+                                            <button class="button">Encerrar</button>
+                                        </form>
+                                    <?php endif; ?>
+                                    <?php if ((int) ($showtime['ticket_count'] ?? 0) === 0 && (int) ($showtime['public_order_count'] ?? 0) === 0): ?>
+                                        <form method="post" onsubmit="return confirm('Excluir esta sessão? Esta ação não pode ser desfeita.')">
+                                            <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                                            <input type="hidden" name="action" value="delete">
+                                            <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
+                                            <button class="button danger">Excluir</button>
+                                        </form>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
                         </tr>
                     <?php endforeach; ?>
                     <?php if (!$showtimes): ?>
