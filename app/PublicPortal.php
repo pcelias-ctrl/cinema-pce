@@ -108,6 +108,11 @@ final class PublicPortal
             'promo_banner_mime' => 'VARCHAR(80) NULL AFTER cover_data',
             'promo_banner_data' => 'LONGBLOB NULL AFTER promo_banner_mime',
         ]);
+        if ($db->query("SHOW TABLES LIKE 'products'")->fetch()) {
+            self::ensureColumns($db, 'products', [
+                'sort_order' => 'SMALLINT NOT NULL DEFAULT 0 AFTER stock_quantity',
+            ]);
+        }
         self::ensureColumns($db, 'rooms', [
             'projection_laser' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER large_seats',
             'dolby_sound' => 'TINYINT(1) NOT NULL DEFAULT 0 AFTER projection_laser',
@@ -336,7 +341,7 @@ final class PublicPortal
                 $productsUrl=(float)$order['products_total']>0?self::publicUrl(['action'=>'products_pdf','order'=>$order['order_code']]):'';
                 $detailsStmt=$db->prepare('SELECT showtimes.starts_at,showtimes.audio_type,showtimes.is_3d,movies.title,movies.age_rating,rooms.name room_name FROM showtimes INNER JOIN movies ON movies.id=showtimes.movie_id INNER JOIN rooms ON rooms.id=showtimes.room_id WHERE showtimes.id=?');$detailsStmt->execute([(int)$order['showtime_id']]);$details=$detailsStmt->fetch()?:[];
                 $ticketsStmt=$db->prepare("SELECT room_seats.seat_code,tickets.ticket_type,tickets.unit_price FROM tickets INNER JOIN room_seats ON room_seats.id=tickets.room_seat_id WHERE tickets.sale_code=? AND tickets.status='vendido' ORDER BY room_seats.row_label,room_seats.seat_number");$ticketsStmt->execute([$order['order_code']]);$emailTickets=$ticketsStmt->fetchAll();
-                $productsStmt=$db->prepare("SELECT products.name,COUNT(*) quantity,public_order_products.unit_price FROM public_order_products INNER JOIN products ON products.id=public_order_products.product_id WHERE public_order_products.order_id=? AND public_order_products.status IN ('pendente','entregue') GROUP BY products.id,products.name,public_order_products.unit_price ORDER BY products.name");$productsStmt->execute([$orderId]);$emailProducts=$productsStmt->fetchAll();
+                $productsStmt=$db->prepare("SELECT products.name,COUNT(*) quantity,public_order_products.unit_price FROM public_order_products INNER JOIN products ON products.id=public_order_products.product_id WHERE public_order_products.order_id=? AND public_order_products.status IN ('pendente','entregue') GROUP BY products.id,products.name,products.sort_order,public_order_products.unit_price ORDER BY products.sort_order,products.name");$productsStmt->execute([$orderId]);$emailProducts=$productsStmt->fetchAll();
                 $cinema=self::cinema($db);$escape=static fn($value):string=>htmlspecialchars((string)$value,ENT_QUOTES,'UTF-8');$money=static fn($value):string=>'R$ '.number_format((float)$value,2,',','.');
                 $ticketRows='';foreach($emailTickets as $emailTicket)$ticketRows.='<tr><td style="padding:10px 0;border-bottom:1px solid #ece7e3"><strong>Poltrona '.$escape($emailTicket['seat_code']).'</strong><br><span style="color:#756b65;font-size:13px">'.ucfirst($escape($emailTicket['ticket_type'])).'</span></td><td style="padding:10px 0;border-bottom:1px solid #ece7e3;text-align:right">'.$money($emailTicket['unit_price']).'</td></tr>';
                 $productRows='';foreach($emailProducts as $emailProduct)$productRows.='<tr><td style="padding:8px 0">'.$escape($emailProduct['quantity']).'x '.$escape($emailProduct['name']).'</td><td style="padding:8px 0;text-align:right">'.$money((float)$emailProduct['unit_price']*(int)$emailProduct['quantity']).'</td></tr>';

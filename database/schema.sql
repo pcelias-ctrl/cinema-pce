@@ -85,6 +85,7 @@ CREATE TABLE products (
     sku VARCHAR(60) NULL UNIQUE,
     price DECIMAL(10,2) NOT NULL,
     stock_quantity INT NULL,
+    sort_order SMALLINT NOT NULL DEFAULT 0,
     image_mime VARCHAR(80) NULL,
     image_data LONGBLOB NULL,
     active TINYINT(1) NOT NULL DEFAULT 1,
