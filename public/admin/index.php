@@ -2197,7 +2197,7 @@ try {
         $cinemaSettings = cinema_settings();
         $adminProductsEnabled = (int) ($cinemaSettings['admin_products_enabled'] ?? 1) === 1;
         $productCategories = $adminProductsEnabled ? db()->query('SELECT * FROM product_categories WHERE active=1 ORDER BY COALESCE(parent_id,id), parent_id IS NOT NULL, sort_order, name')->fetchAll() : [];
-        $products = $adminProductsEnabled ? db()->query('SELECT products.id,products.category_id,products.name,products.price,products.stock_quantity,products.image_data IS NOT NULL has_image,product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY product_categories.sort_order, products.sort_order, products.name')->fetchAll() : [];
+        $products = $adminProductsEnabled ? db()->query('SELECT products.id,products.category_id,products.name,products.price,products.stock_quantity,products.image_data IS NOT NULL has_image,product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY products.sort_order, product_categories.sort_order, products.name')->fetchAll() : [];
         $screen = json_decode($showtime['screen_config'] ?: '{}', true) ?: ['x' => 270, 'y' => 28, 'w' => 500, 'h' => 34];
 
         layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products, $adminProductsEnabled) {
@@ -2460,7 +2460,7 @@ try {
             http_response_code(404);
             exit('Venda nao encontrada.');
         }
-        $itemsStmt = db()->prepare('SELECT product_sale_items.*, products.name product_name, product_categories.name category_name, product_sales.sale_code, product_sales.payment_method, product_sales.total_amount FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id WHERE product_sales.sale_code=? ORDER BY product_categories.sort_order, products.sort_order, products.name, product_sale_items.id');
+        $itemsStmt = db()->prepare('SELECT product_sale_items.*, products.name product_name, product_categories.name category_name, product_sales.sale_code, product_sales.payment_method, product_sales.total_amount FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id WHERE product_sales.sale_code=? ORDER BY products.sort_order, product_categories.sort_order, products.name, product_sale_items.id');
         $itemsStmt->execute([$saleCode]);
         $items = $itemsStmt->fetchAll();
         $first = $tickets[0];
@@ -2629,7 +2629,7 @@ try {
     if ($route === 'product_receipt') {
         Auth::requireLogin();
         $saleCode = trim($_GET['sale_code'] ?? '');
-        $stmt = db()->prepare('SELECT product_sale_items.*, products.name product_name, product_categories.name category_name, product_sales.sale_code, product_sales.payment_method, product_sales.total_amount FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id WHERE product_sales.sale_code=? ORDER BY product_categories.sort_order, products.sort_order, products.name, product_sale_items.id');
+        $stmt = db()->prepare('SELECT product_sale_items.*, products.name product_name, product_categories.name category_name, product_sales.sale_code, product_sales.payment_method, product_sales.total_amount FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id INNER JOIN product_categories ON product_categories.id=products.category_id WHERE product_sales.sale_code=? ORDER BY products.sort_order, product_categories.sort_order, products.name, product_sale_items.id');
         $stmt->execute([$saleCode]);
         $items = $stmt->fetchAll();
         if (!$items) { http_response_code(404); exit('Recibo de produtos não encontrado.'); }
