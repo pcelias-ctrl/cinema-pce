@@ -2530,7 +2530,7 @@ try {
                 </div>
                 <button class="button primary">Salvar sala</button>
             </form>
-            <script src="/assets/js/seat-map-editor.js"></script>
+            <script src="/assets/js/seat-map-editor.js?v=<?= (int) filemtime(__DIR__ . '/../assets/js/seat-map-editor.js') ?>"></script>
             <?php
         });
         exit;

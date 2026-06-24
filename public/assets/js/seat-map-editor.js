@@ -35,6 +35,22 @@
         summary.textContent = `${seats.length} poltronas | ${seats.length - large} normais | ${large} grandes | ${unavailable} inutilizadas`;
     }
 
+    function normalizeSeat(seat, index) {
+        const row = String(seat.row || 'A').trim().toUpperCase() || 'A';
+        const number = parseInt(seat.number, 10) || (index + 1);
+        return {
+            id: seat.id || `${row}-${number}`,
+            row,
+            number,
+            type: seat.type === 'grande' ? 'grande' : 'normal',
+            unavailable: seat.unavailable === true || seat.unavailable === 1 || seat.unavailable === '1',
+            x: parseFloat(seat.x ?? 0),
+            y: parseFloat(seat.y ?? 0),
+            w: parseFloat(seat.w ?? (seat.type === 'grande' ? 62 : 44)),
+            h: parseFloat(seat.h ?? 44)
+        };
+    }
+
     function makeDraggable(element, onMove) {
         let start = null;
         element.addEventListener('pointerdown', (event) => {
@@ -71,6 +87,9 @@
             node.style.left = `${seat.x}px`;
             node.style.top = `${seat.y}px`;
             node.dataset.id = seat.id;
+            node.addEventListener('pointerdown', () => {
+                selectedSeatId = seat.id;
+            }, { capture: true });
             node.addEventListener('click', () => {
                 selectedSeatId = seat.id;
                 render();
@@ -90,7 +109,7 @@
     }
 
     function loadInitial() {
-        seats = readJson(layoutInput, []);
+        seats = readJson(layoutInput, []).map(normalizeSeat);
         const screenConfig = readJson(screenInput, {});
         if (screenConfig.x !== undefined) screen.style.left = `${screenConfig.x}px`;
         if (screenConfig.y !== undefined) screen.style.top = `${screenConfig.y}px`;
@@ -191,6 +210,8 @@
         screen.style.height = '34px';
         render();
     });
+
+    document.getElementById('room-form').addEventListener('submit', persist);
 
     makeDraggable(screen, persist);
     loadInitial();
