@@ -140,12 +140,16 @@ CREATE TABLE showtimes (
     price DECIMAL(10,2) NOT NULL,
     half_price DECIMAL(10,2) NULL,
     status ENUM('programada', 'cancelada', 'encerrada') NOT NULL DEFAULT 'programada',
+    closed_at DATETIME NULL,
+    closed_by INT UNSIGNED NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_showtimes_starts_at (starts_at),
     INDEX idx_showtimes_audio (audio_type),
+    INDEX idx_showtimes_closed_by (closed_by),
     CONSTRAINT fk_showtimes_movie FOREIGN KEY (movie_id) REFERENCES movies(id),
-    CONSTRAINT fk_showtimes_room FOREIGN KEY (room_id) REFERENCES rooms(id)
+    CONSTRAINT fk_showtimes_room FOREIGN KEY (room_id) REFERENCES rooms(id),
+    CONSTRAINT fk_showtimes_closed_by FOREIGN KEY (closed_by) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE cash_registers (

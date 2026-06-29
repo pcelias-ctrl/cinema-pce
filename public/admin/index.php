@@ -76,7 +76,7 @@ function layout(string $title, callable $content): void
                                 <li class="nav-item"><a class="nav-link <?= $navClass('public_settings') ?>" href="index.php?route=public_settings"><i></i><p>Venda Online</p></a></li>
                             <?php endif; ?>
                             <li class="nav-header">OPERAÇÃO</li>
-                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print', 'ticket_cancel'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print', 'ticket_cancel', 'showtime_close', 'showtime_report'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Check-in QR</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['product_pickup', 'product_pickup_lookup'], true) ? 'active' : '' ?>" href="index.php?route=product_pickup"><i></i><p>Retira de Produtos</p></a></li>
@@ -538,6 +538,21 @@ function ensure_room_seat_availability_columns(): void
     $ready = true;
 }
 
+function ensure_showtime_closure_columns(): void
+{
+    static $ready = false;
+    if ($ready) return;
+
+    if (!db()->query("SHOW COLUMNS FROM showtimes LIKE 'closed_at'")->fetch()) {
+        db()->exec('ALTER TABLE showtimes ADD COLUMN closed_at DATETIME NULL AFTER status');
+    }
+    if (!db()->query("SHOW COLUMNS FROM showtimes LIKE 'closed_by'")->fetch()) {
+        db()->exec('ALTER TABLE showtimes ADD COLUMN closed_by INT UNSIGNED NULL AFTER closed_at');
+    }
+
+    $ready = true;
+}
+
 function ensure_product_tables(): void
 {
     static $ready = false;
@@ -834,8 +849,11 @@ try {
     Auth::requireLogin();
     ensure_movie_age_rating();
 
-    if (in_array($route, ['showtimes', 'showtime_new', 'showtime_edit', 'sales', 'sale_new'], true)) {
+    if (in_array($route, ['showtimes', 'showtime_new', 'showtime_edit', 'sales', 'sale_new', 'showtime_report'], true)) {
         ensure_ticket_pricing_columns();
+    }
+    if (in_array($route, ['showtimes', 'sales', 'sale_new', 'showtime_close', 'showtime_report'], true)) {
+        ensure_showtime_closure_columns();
     }
     if (in_array($route, ['rooms', 'room_new', 'room_edit', 'sales', 'sale_new', 'ticket_receipt', 'ticket_cancel'], true)) {
         ensure_room_seat_availability_columns();
@@ -1412,8 +1430,12 @@ try {
             }
 
             if ($action === 'close') {
-                $stmt = db()->prepare("UPDATE showtimes SET status = 'encerrada' WHERE id = ?");
-                $stmt->execute([$showtimeId]);
+                $stmt = db()->prepare(
+                    "UPDATE showtimes
+                     SET status='encerrada', closed_at=COALESCE(closed_at, NOW()), closed_by=COALESCE(closed_by, ?)
+                     WHERE id=? AND status='programada'"
+                );
+                $stmt->execute([(int) Auth::user()['id'], $showtimeId]);
                 header('Location: index.php?route=showtimes&closed=1');
                 exit;
             }
@@ -1610,13 +1632,15 @@ try {
                             <td>
                                 <div class="table-actions">
                                     <a class="button" href="index.php?route=showtime_edit&id=<?= (int) $showtime['id'] ?>">Editar</a>
-                                    <?php if ($showtime['status'] !== 'encerrada'): ?>
+                                    <?php if ($showtime['status'] === 'programada'): ?>
                                         <form method="post" onsubmit="return confirm('Encerrar esta sessão? Ela deixará de aparecer para venda.')">
                                             <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                                             <input type="hidden" name="action" value="close">
                                             <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
                                             <button class="button">Encerrar</button>
                                         </form>
+                                    <?php elseif ($showtime['status'] === 'encerrada'): ?>
+                                        <a class="button" href="index.php?route=showtime_report&id=<?= (int) $showtime['id'] ?>" target="_blank" rel="noopener">Relatório</a>
                                     <?php endif; ?>
                                     <?php if ((int) ($showtime['ticket_count'] ?? 0) === 0 && (int) ($showtime['public_order_count'] ?? 0) === 0): ?>
                                         <form method="post" onsubmit="return confirm('Excluir esta sessão? Esta ação não pode ser desfeita.')">
@@ -1965,6 +1989,132 @@ try {
         exit;
     }
 
+    if ($route === 'showtime_close') {
+        Auth::requireLogin();
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            http_response_code(405);
+            exit('Método não permitido.');
+        }
+
+        verify_csrf();
+        $showtimeId = (int) ($_POST['showtime_id'] ?? 0);
+        if ($showtimeId <= 0) throw new RuntimeException('Sessão inválida.');
+
+        db()->beginTransaction();
+        try {
+            $lock = db()->prepare('SELECT id, status FROM showtimes WHERE id=? FOR UPDATE');
+            $lock->execute([$showtimeId]);
+            $showtime = $lock->fetch();
+            if (!$showtime) throw new RuntimeException('Sessão não encontrada.');
+            if ($showtime['status'] === 'cancelada') throw new RuntimeException('Uma sessão cancelada não pode ser encerrada.');
+
+            if ($showtime['status'] === 'programada') {
+                $close = db()->prepare(
+                    "UPDATE showtimes
+                     SET status='encerrada', closed_at=NOW(), closed_by=?
+                     WHERE id=? AND status='programada'"
+                );
+                $close->execute([(int) Auth::user()['id'], $showtimeId]);
+                if ($close->rowCount() !== 1) throw new RuntimeException('Não foi possível encerrar a sessão.');
+            }
+
+            db()->commit();
+        } catch (Throwable $exception) {
+            if (db()->inTransaction()) db()->rollBack();
+            throw $exception;
+        }
+
+        header('Location: index.php?route=showtime_report&id=' . $showtimeId, true, 303);
+        exit;
+    }
+
+    if ($route === 'showtime_report') {
+        Auth::requireLogin();
+        $showtimeId = (int) ($_GET['id'] ?? 0);
+        $stmt = db()->prepare(
+            'SELECT showtimes.*, movies.title movie_title, rooms.name room_name, users.name closed_by_name
+             FROM showtimes
+             INNER JOIN movies ON movies.id=showtimes.movie_id
+             INNER JOIN rooms ON rooms.id=showtimes.room_id
+             LEFT JOIN users ON users.id=showtimes.closed_by
+             WHERE showtimes.id=?
+             LIMIT 1'
+        );
+        $stmt->execute([$showtimeId]);
+        $showtime = $stmt->fetch();
+        if (!$showtime || $showtime['status'] !== 'encerrada') {
+            http_response_code(404);
+            exit('Sessão encerrada não encontrada.');
+        }
+
+        $totalsStmt = db()->prepare(
+            "SELECT ticket_type, payment_method, COUNT(*) quantity, COALESCE(SUM(unit_price),0) total
+             FROM tickets
+             WHERE showtime_id=? AND status='vendido'
+             GROUP BY ticket_type, payment_method"
+        );
+        $totalsStmt->execute([$showtimeId]);
+        $ticketCounts = ['meia' => 0, 'inteira' => 0];
+        $paymentTotals = ['dinheiro' => 0.0, 'cartao' => 0.0, 'pix' => 0.0];
+        foreach ($totalsStmt->fetchAll() as $row) {
+            $ticketType = $row['ticket_type'] === 'meia' ? 'meia' : 'inteira';
+            $ticketCounts[$ticketType] += (int) $row['quantity'];
+            if (array_key_exists($row['payment_method'], $paymentTotals)) {
+                $paymentTotals[$row['payment_method']] += (float) $row['total'];
+            }
+        }
+        $ticketTotal = array_sum($ticketCounts);
+        $grandTotal = array_sum($paymentTotals);
+        $cinema = cinema_settings();
+        ?>
+        <!doctype html>
+        <html lang="pt-br">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Encerramento da sessão <?= (int) $showtimeId ?></title>
+            <style>
+                *{box-sizing:border-box;font-weight:800}html,body{margin:0;background:#fff;color:#000}
+                body{font:800 10.5px/1.18 "Courier New",Courier,monospace}
+                .actions{padding:8px;text-align:center;background:#eee}.actions button{padding:7px 10px;border:0;background:#222;color:#fff;font:800 11px "Courier New",monospace}
+                .report{width:54mm;max-width:calc(100% - 4mm);margin:auto;padding:2mm 0}
+                h1,h2,p{margin:0;text-align:center}h1{font-size:14px;line-height:1.1;text-transform:uppercase}h2{margin-top:1.5mm;font-size:13px;line-height:1.1;text-transform:uppercase}
+                .session{margin-top:1.5mm;font-size:12px}.line{height:2.5mm;margin:1mm 0;overflow:hidden}.line:before{content:"--------------------------------"}
+                .row{display:flex;justify-content:space-between;gap:2mm;margin:.8mm 0}.row span:last-child{text-align:right}
+                .total{margin-top:1.5mm;font-size:13px}.closed{margin-top:2mm;font-size:9px;line-height:1.15;text-transform:uppercase}
+                @media print{.actions{display:none}.report{width:54mm;max-width:none;padding:0}@page{size:58mm auto;margin:2mm}}
+            </style>
+        </head>
+        <body>
+            <div class="actions"><button type="button" onclick="window.print()">Imprimir novamente</button></div>
+            <main class="report">
+                <h1><?= e($cinema['cinema_name']) ?></h1>
+                <h2>ENCERRAMENTO DE SESSÃO</h2>
+                <p class="session"><?= e($showtime['movie_title']) ?></p>
+                <p class="session"><?= e($showtime['room_name']) ?></p>
+                <p class="session"><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(strtoupper($showtime['audio_type'])) ?> | <?= !empty($showtime['is_3d']) ? '3D' : '2D' ?></p>
+                <div class="line"></div>
+                <div class="row"><span>MEIA</span><span><?= (int) $ticketCounts['meia'] ?></span></div>
+                <div class="row"><span>INTEIRA</span><span><?= (int) $ticketCounts['inteira'] ?></span></div>
+                <div class="row"><span>TOTAL DE INGRESSOS</span><span><?= (int) $ticketTotal ?></span></div>
+                <div class="line"></div>
+                <div class="row"><span>DINHEIRO</span><span>R$ <?= e(number_format($paymentTotals['dinheiro'], 2, ',', '.')) ?></span></div>
+                <div class="row"><span>CARTÃO</span><span>R$ <?= e(number_format($paymentTotals['cartao'], 2, ',', '.')) ?></span></div>
+                <div class="row"><span>PIX</span><span>R$ <?= e(number_format($paymentTotals['pix'], 2, ',', '.')) ?></span></div>
+                <div class="line"></div>
+                <div class="row total"><span>TOTAL GERAL</span><span>R$ <?= e(number_format($grandTotal, 2, ',', '.')) ?></span></div>
+                <p class="closed">
+                    <?php if ($showtime['closed_at']): ?>ENCERRADA EM <?= e(date('d/m/Y', strtotime($showtime['closed_at']))) ?> ÀS <?= e(date('H:i', strtotime($showtime['closed_at']))) ?><?php else: ?>DATA DE ENCERRAMENTO NÃO INFORMADA<?php endif; ?>
+                    <br>OPERADOR: <?= e($showtime['closed_by_name'] ?: 'NÃO INFORMADO') ?>
+                </p>
+            </main>
+            <script>window.addEventListener('load',()=>window.setTimeout(()=>window.print(),200));</script>
+        </body>
+        </html>
+        <?php
+        exit;
+    }
+
     if ($route === 'sales') {
         Auth::requireLogin();
         $cash = open_cash_register();
@@ -2199,8 +2349,13 @@ try {
         $productCategories = $adminProductsEnabled ? db()->query('SELECT * FROM product_categories WHERE active=1 ORDER BY COALESCE(parent_id,id), parent_id IS NOT NULL, sort_order, name')->fetchAll() : [];
         $products = $adminProductsEnabled ? db()->query('SELECT products.id,products.category_id,products.name,products.price,products.stock_quantity,products.image_data IS NOT NULL has_image,product_categories.name category_name FROM products INNER JOIN product_categories ON product_categories.id=products.category_id WHERE products.active=1 AND product_categories.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity > 0) ORDER BY products.sort_order, product_categories.sort_order, products.name')->fetchAll() : [];
         $screen = json_decode($showtime['screen_config'] ?: '{}', true) ?: ['x' => 270, 'y' => 28, 'w' => 500, 'h' => 34];
+        $closeConfirmation = "ATENÇÃO: confirme o encerramento desta sessão.\n\n"
+            . 'Filme: ' . $showtime['movie_title'] . "\n"
+            . 'Sala: ' . $showtime['room_name'] . "\n"
+            . 'Sessão: ' . date('d/m/Y H:i', strtotime($showtime['starts_at']))
+            . "\n\nApós confirmar, novas vendas serão bloqueadas e o relatório será aberto para impressão.";
 
-        layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products, $adminProductsEnabled) {
+        layout('Venda', function () use ($showtime, $seats, $screen, $productCategories, $products, $adminProductsEnabled, $closeConfirmation) {
             ?>
             <?php if (!empty($_GET['seat_conflict'])): ?><p class="sale-conflict">Uma poltrona foi vendida em outro terminal. O mapa foi atualizado; selecione outra.</p><?php endif; ?>
             <p class="sale-conflict" id="sale-seat-notice" hidden></p>
@@ -2252,6 +2407,7 @@ try {
                         <label><input type="radio" name="active_ticket_type" value="inteira"><b>Inteira</b><small>R$ <?= e(number_format((float) $showtime['price'], 2, ',', '.')) ?></small></label>
                     </div>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
+                    <button class="button danger" type="submit" form="close-showtime-form" data-confirm="<?= e($closeConfirmation) ?>" onclick="return confirm(this.dataset.confirm)">Encerrar sessão</button>
                 </footer>
                 <div class="sale-wizard" id="sale-wizard" hidden>
                     <section class="sale-wizard-dialog" role="dialog" aria-modal="true" aria-labelledby="wizard-title">
@@ -2285,6 +2441,10 @@ try {
                         </footer>
                     </section>
                 </div>
+            </form>
+            <form method="post" action="index.php?route=showtime_close" id="close-showtime-form" target="_blank" hidden>
+                <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
             </form>
             <script src="/assets/js/sale.js?v=<?= (int) filemtime(__DIR__ . '/../assets/js/sale.js') ?>"></script>
             <?php
