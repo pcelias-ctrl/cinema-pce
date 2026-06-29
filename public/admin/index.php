@@ -1991,7 +1991,7 @@ try {
                 <div class="columns compact">
                     <label>Data da sessão<input name="date" type="date" value="<?= e($date) ?>"></label>
                 </div>
-                <a class="button danger" href="index.php?route=ticket_cancel">Cancelar venda</a>
+                <a class="button danger" href="index.php?route=ticket_cancel">Cancelar ingresso</a>
                 <button class="button primary">Buscar sessões</button>
             </form>
             <div class="grid cards">
@@ -2314,7 +2314,7 @@ try {
                     <a class="button" href="index.php?route=ticket_print&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir ingressos separados</a>
                     <?php if ($productCount): ?><a class="button" href="index.php?route=product_receipt&sale_code=<?= e(urlencode($first['sale_code'])) ?>" target="_blank" rel="noopener">Imprimir produtos (<?= $productCount ?>)</a><?php endif; ?>
                     <a class="button primary" href="index.php?route=sale_new&showtime_id=<?= (int) $first['showtime_id'] ?>">Nova venda nesta sessão</a>
-                    <a class="button danger" href="index.php?route=ticket_cancel&sale_code=<?= e(urlencode($first['sale_code'])) ?>">Cancelar venda</a>
+                    <a class="button danger" href="index.php?route=ticket_cancel">Cancelar ingresso</a>
                     <a class="button" href="index.php?route=sales">Trocar sessão</a>
                 </div>
             </div>
@@ -2352,64 +2352,54 @@ try {
 
     if ($route === 'ticket_cancel') {
         Auth::requireLogin();
-        $saleCode = trim($_GET['sale_code'] ?? $_POST['sale_code'] ?? '');
+        $ticketToken = trim($_GET['ticket_token'] ?? $_POST['ticket_token'] ?? '');
         $reason = trim($_POST['reason'] ?? '');
         $canceled = false;
-        $tickets = [];
-        $products = [];
-        if ($saleCode !== '') {
-            $saleLookup = db()->prepare('SELECT sale_code FROM tickets WHERE sale_code = ? OR qr_token = ? LIMIT 1');
-            $saleLookup->execute([$saleCode, $saleCode]);
-            $resolvedSaleCode = $saleLookup->fetchColumn();
-            if ($resolvedSaleCode) {
-                $saleCode = (string) $resolvedSaleCode;
-            }
-            $stmt = db()->prepare(
-                'SELECT tickets.*, room_seats.seat_code, movies.title movie_title, rooms.name room_name, showtimes.starts_at
-                 FROM tickets
-                 INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
-                 INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
-                 INNER JOIN movies ON movies.id = showtimes.movie_id
-                 INNER JOIN rooms ON rooms.id = showtimes.room_id
-                 WHERE tickets.sale_code = ?
-                 ORDER BY room_seats.row_label, room_seats.seat_number'
-            );
-            $stmt->execute([$saleCode]);
-            $tickets = $stmt->fetchAll();
-            $productStmt = db()->prepare('SELECT product_sale_items.*, products.name product_name FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id WHERE product_sales.sale_code=? ORDER BY products.sort_order, products.name, product_sale_items.id');
-            $productStmt->execute([$saleCode]);
-            $products = $productStmt->fetchAll();
+        $ticket = null;
+
+        if (str_contains($ticketToken, 'ticket_validate')) {
+            $parts = parse_url($ticketToken);
+            parse_str($parts['query'] ?? '', $query);
+            $ticketToken = trim($query['token'] ?? '');
+        }
+
+        $ticketSql =
+            'SELECT tickets.*, room_seats.seat_code, movies.title movie_title, rooms.name room_name, showtimes.starts_at
+             FROM tickets
+             INNER JOIN room_seats ON room_seats.id = tickets.room_seat_id
+             INNER JOIN showtimes ON showtimes.id = tickets.showtime_id
+             INNER JOIN movies ON movies.id = showtimes.movie_id
+             INNER JOIN rooms ON rooms.id = showtimes.room_id
+             WHERE tickets.qr_token = ?
+             LIMIT 1';
+
+        if ($ticketToken !== '') {
+            $stmt = db()->prepare($ticketSql);
+            $stmt->execute([$ticketToken]);
+            $ticket = $stmt->fetch() ?: null;
         }
 
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
-            if ($saleCode === '') throw new RuntimeException('Informe o código da venda.');
+            if ($ticketToken === '') throw new RuntimeException('Informe o token do ingresso.');
             db()->beginTransaction();
             try {
-                $lock = db()->prepare('SELECT id, status FROM tickets WHERE sale_code=? FOR UPDATE');
-                $lock->execute([$saleCode]);
-                $lockedTickets = $lock->fetchAll();
-                if (!$lockedTickets) throw new RuntimeException('Venda não encontrada.');
-                $soldCount = count(array_filter($lockedTickets, static fn($ticket) => $ticket['status'] === 'vendido'));
-                if ($soldCount < 1) throw new RuntimeException('Esta venda já está cancelada.');
+                $lock = db()->prepare('SELECT id, status FROM tickets WHERE qr_token=? LIMIT 1 FOR UPDATE');
+                $lock->execute([$ticketToken]);
+                $lockedTicket = $lock->fetch();
+                if (!$lockedTicket) throw new RuntimeException('Ingresso não encontrado.');
+                if ($lockedTicket['status'] !== 'vendido') throw new RuntimeException('Este ingresso já está cancelado ou não está disponível para cancelamento.');
 
-                $stockStmt = db()->prepare("SELECT products.id product_id, COUNT(*) quantity FROM product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id INNER JOIN products ON products.id=product_sale_items.product_id WHERE product_sales.sale_code=? AND product_sale_items.status<>'cancelado' AND products.stock_quantity IS NOT NULL GROUP BY products.id");
-                $stockStmt->execute([$saleCode]);
-                $stockRows = $stockStmt->fetchAll();
+                $cancelTicket = db()->prepare(
+                    "UPDATE tickets
+                     SET status='cancelado', canceled_at=NOW(), canceled_by=?, cancel_reason=?
+                     WHERE id=? AND status='vendido'"
+                );
+                $cancelTicket->execute([(int) Auth::user()['id'], $reason ?: null, (int) $lockedTicket['id']]);
+                if ($cancelTicket->rowCount() !== 1) throw new RuntimeException('Não foi possível cancelar o ingresso.');
 
-                $cancelTickets = db()->prepare("UPDATE tickets SET status='cancelado', canceled_at=NOW(), canceled_by=?, cancel_reason=? WHERE sale_code=? AND status='vendido'");
-                $cancelTickets->execute([(int) Auth::user()['id'], $reason ?: null, $saleCode]);
-
-                $cancelProducts = db()->prepare("UPDATE product_sale_items INNER JOIN product_sales ON product_sales.id=product_sale_items.product_sale_id SET product_sale_items.status='cancelado' WHERE product_sales.sale_code=? AND product_sale_items.status<>'cancelado'");
-                $cancelProducts->execute([$saleCode]);
-
-                $restoreStock = db()->prepare('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ? AND stock_quantity IS NOT NULL');
-                foreach ($stockRows as $row) $restoreStock->execute([(int) $row['quantity'], (int) $row['product_id']]);
-
-                db()->prepare("UPDATE public_orders SET status='estornado' WHERE order_code=? AND status='pago'")->execute([$saleCode]);
-                db()->prepare("UPDATE public_order_products INNER JOIN public_orders ON public_orders.id=public_order_products.order_id SET public_order_products.status='cancelado' WHERE public_orders.order_code=? AND public_order_products.status<>'cancelado'")->execute([$saleCode]);
                 db()->commit();
-                header('Location: index.php?route=ticket_cancel&sale_code=' . urlencode($saleCode) . '&canceled=1');
+                header('Location: index.php?route=ticket_cancel&ticket_token=' . urlencode($ticketToken) . '&canceled=1');
                 exit;
             } catch (Throwable $exception) {
                 if (db()->inTransaction()) db()->rollBack();
@@ -2418,33 +2408,38 @@ try {
         }
 
         $canceled = !empty($_GET['canceled']);
-        layout('Cancelamento de Venda', function () use ($saleCode, $tickets, $products, $canceled) {
-            $soldTickets = array_filter($tickets, static fn($ticket) => $ticket['status'] === 'vendido');
+        if ($canceled && $ticketToken !== '') {
+            $stmt = db()->prepare($ticketSql);
+            $stmt->execute([$ticketToken]);
+            $ticket = $stmt->fetch() ?: null;
+        }
+
+        layout('Cancelamento de Ingresso', function () use ($ticketToken, $ticket, $canceled) {
             ?>
-            <div class="section-head"><div><h1>Cancelamento de venda</h1><p class="muted">Cancela ingressos, libera poltronas e remove a venda dos totais do caixa.</p></div></div>
-            <?php if ($canceled): ?><p class="alert success">Venda cancelada. As poltronas foram liberadas para venda.</p><?php endif; ?>
+            <div class="section-head"><div><h1>Cancelamento de ingresso</h1><p class="muted">Cancela somente o ingresso identificado pelo token, libera sua poltrona e retira seu valor do caixa.</p></div></div>
+            <?php if ($canceled): ?><p class="alert success">Ingresso cancelado. A poltrona foi liberada para venda.</p><?php endif; ?>
             <form method="get" class="panel form filters">
                 <input type="hidden" name="route" value="ticket_cancel">
-                <div class="columns compact"><label>Código da venda<input name="sale_code" value="<?= e($saleCode) ?>" placeholder="Ex: V2026..."></label></div>
-                <button class="button primary">Localizar venda</button>
+                <div class="columns compact"><label>Token do ingresso<input name="ticket_token" value="<?= e($ticketToken) ?>" placeholder="Leia o QR Code ou digite o token"></label></div>
+                <button class="button primary">Localizar ingresso</button>
             </form>
-            <?php if ($saleCode !== '' && !$tickets): ?><p class="alert">Venda não encontrada.</p><?php endif; ?>
-            <?php if ($tickets): ?>
+            <?php if ($ticketToken !== '' && !$ticket): ?><p class="alert">Ingresso não encontrado.</p><?php endif; ?>
+            <?php if ($ticket): ?>
                 <section class="panel">
-                    <h2><?= e($tickets[0]['movie_title']) ?></h2>
-                    <p><strong>Sala:</strong> <?= e($tickets[0]['room_name']) ?> | <strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($tickets[0]['starts_at']))) ?></p>
+                    <h2><?= e($ticket['movie_title']) ?></h2>
+                    <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
+                    <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?> | <strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
                     <table><thead><tr><th>Poltrona</th><th>Tipo</th><th>Valor</th><th>Status</th></tr></thead><tbody>
-                        <?php foreach ($tickets as $ticket): ?><tr><td><?= e($ticket['seat_code']) ?></td><td><?= e(ucfirst($ticket['ticket_type'])) ?></td><td>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></td><td><span class="status-badge <?= $ticket['status'] === 'vendido' ? 'active' : 'inactive' ?>"><?= e(ucfirst($ticket['status'])) ?></span></td></tr><?php endforeach; ?>
+                        <tr><td><?= e($ticket['seat_code']) ?></td><td><?= e(ucfirst($ticket['ticket_type'])) ?></td><td>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></td><td><span class="status-badge <?= $ticket['status'] === 'vendido' ? 'active' : 'inactive' ?>"><?= e(ucfirst($ticket['status'])) ?></span></td></tr>
                     </tbody></table>
-                    <?php if ($products): ?><h2>Produtos vinculados</h2><p class="muted"><?= count($products) ?> produto(s) serão cancelados junto com a venda.</p><?php endif; ?>
-                    <?php if ($soldTickets): ?>
-                        <form method="post" class="form" onsubmit="return confirm('Confirmar cancelamento desta venda? As poltronas voltarão para venda.')">
+                    <?php if ($ticket['status'] === 'vendido'): ?>
+                        <form method="post" class="form" onsubmit="return confirm('Confirmar o cancelamento deste ingresso? A poltrona voltará para venda.')">
                             <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
-                            <input type="hidden" name="sale_code" value="<?= e($saleCode) ?>">
+                            <input type="hidden" name="ticket_token" value="<?= e($ticketToken) ?>">
                             <label>Motivo do cancelamento<textarea name="reason" rows="3" placeholder="Opcional"></textarea></label>
-                            <button class="button danger">Cancelar venda e liberar poltronas</button>
+                            <button class="button danger">Cancelar ingresso e liberar poltrona</button>
                         </form>
-                    <?php else: ?><p class="alert">Esta venda já está cancelada.</p><?php endif; ?>
+                    <?php else: ?><p class="alert">Este ingresso já está cancelado.</p><?php endif; ?>
                 </section>
             <?php endif; ?>
             <?php
@@ -2473,44 +2468,38 @@ try {
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Impressao da venda <?= e($first['sale_code']) ?></title>
             <style>
-                *{box-sizing:border-box} html,body{margin:0;background:#fff;color:#000} body{font:12px/1.25 "Courier New",Courier,monospace}
+                *{box-sizing:border-box} html,body{margin:0;background:#fff;color:#000} body{font:11px/1.2 "Courier New",Courier,monospace}
                 .actions{display:flex;justify-content:center;gap:8px;padding:14px;background:#f3f3f3}
                 .actions button{padding:9px 14px;border:0;border-radius:3px;background:#c2410c;color:#fff;font-weight:700;cursor:pointer}
-                .receipt{width:40ch;max-width:calc(100% - 8mm);margin:0 auto;padding:4mm 0;text-align:left;overflow-wrap:anywhere}
+                .receipt{width:54mm;max-width:calc(100% - 4mm);margin:0 auto;padding:2mm 0;text-align:left;overflow-wrap:anywhere}
                 .receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}
                 h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
-                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}.ticket-main-info{font-size:15px;font-weight:700;line-height:1.18;margin:4px 0}
-                [data-ticket-qr]{width:36mm;height:36mm;margin:8px auto 4px}[data-ticket-qr] canvas,[data-ticket-qr] img{width:36mm!important;height:36mm!important;display:block}
+                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"--------------------------------"}p{margin:3px 0;line-height:1.2}
+                .ticket-receipt{text-align:center}.ticket-cinema,.ticket-movie,.ticket-session,.ticket-room{margin:0 0 2.2mm;font-weight:800;line-height:1.12}
+                .ticket-cinema{font-size:16px}.ticket-movie{font-size:17px;text-transform:uppercase}.ticket-session,.ticket-room{font-size:15px}
+                .ticket-price{display:flex;align-items:baseline;justify-content:space-between;gap:3mm;margin:1mm 0 2mm;font-size:13px;font-weight:800;text-transform:uppercase}
+                [data-ticket-qr]{width:34mm;height:34mm;margin:2mm auto 1mm}[data-ticket-qr] canvas,[data-ticket-qr] img{width:34mm!important;height:34mm!important;display:block}
+                .ticket-token,.ticket-sale{margin:1mm 0;text-align:center;font-size:8px;font-weight:800;line-height:1.15;word-break:break-all}
+                .ticket-notice{margin:3mm 0 0;text-align:center;font-size:9px;font-weight:800;line-height:1.2;text-transform:uppercase}
                 .code{text-align:center;font-size:8px;word-break:break-all}.thanks{text-align:center;margin-top:8px;font-weight:700}
                 .receipt+.receipt{break-before:page;page-break-before:always}
-                @media print{.actions{display:none}.receipt{width:40ch;max-width:none;padding:0}.receipt+.receipt{break-before:page;page-break-before:always}@page{size:80mm auto;margin:3mm}}
+                @media print{.actions{display:none}.receipt{width:54mm;max-width:none;padding:0}.receipt+.receipt{break-before:page;page-break-before:always}@page{size:58mm auto;margin:2mm}}
             </style>
         </head>
         <body>
             <div class="actions"><button id="print-all" type="button">Imprimir ingressos e produtos</button></div>
             <?php foreach ($tickets as $ticket): ?>
                 <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
-                <main class="receipt">
-                    <?php if ($cinema['has_logo']): ?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif; ?>
-                    <h1><?= e($cinema['cinema_name']) ?></h1>
-                    <div class="company">
-                        <?php if ($cinema['cnpj']): ?>CNPJ <?= e($cinema['cnpj']) ?><br><?php endif; ?>
-                        <?php if ($cinema['address']): ?><?= nl2br(e($cinema['address'])) ?><br><?php endif; ?>
-                        <?= e($cinema['phone'] ?: $cinema['whatsapp']) ?>
-                    </div>
-                    <div class="line"></div>
-                    <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
-                    <p class="ticket-main-info"><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
-                    <p><strong>Classificacao:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
-                    <p class="ticket-main-info"><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
-                    <p><strong>Sessao:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
-                    <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
-                    <p><strong>Tipo:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?></p>
-                    <p><strong>Valor:</strong> R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
-                    <div class="line"></div>
+                <main class="receipt ticket-receipt">
+                    <p class="ticket-cinema"><?= e($cinema['cinema_name']) ?></p>
+                    <p class="ticket-movie"><?= e($ticket['movie_title']) ?></p>
+                    <p class="ticket-session">SESSÃO <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
+                    <p class="ticket-room"><?= e($ticket['room_name']) ?> - Poltrona: <?= e($ticket['seat_code']) ?></p>
+                    <div class="ticket-price"><strong><?= e($ticket['ticket_type'] ?? 'inteira') ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
                     <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
-                    <div class="code"><?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></div>
-                    <p class="thanks">Apresente este ingresso na entrada.</p>
+                    <p class="ticket-token">TOKEN: <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
+                    <p class="ticket-sale">VENDA: <?= e($ticket['sale_code']) ?></p>
+                    <p class="ticket-notice">INGRESSO VÁLIDO SOMENTE PARA A SESSÃO INDICADA.<br>Emitido em <?= e(date('d/m/Y', strtotime($ticket['sold_at']))) ?> às <?= e(date('H:i', strtotime($ticket['sold_at']))) ?></p>
                 </main>
             <?php endforeach; ?>
             <?php foreach ($items as $item): ?>
@@ -2568,17 +2557,18 @@ try {
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <title>Recibo <?= e($first['sale_code']) ?></title>
             <style>
-                *{box-sizing:border-box} html,body{margin:0;background:#fff;color:#000} body{font:12px/1.25 "Courier New",Courier,monospace}
+                *{box-sizing:border-box} html,body{margin:0;background:#fff;color:#000} body{font:11px/1.2 "Courier New",Courier,monospace}
                 .actions{display:flex;justify-content:center;gap:8px;padding:14px;background:#f3f3f3}
                 .actions button{padding:9px 14px;border:0;border-radius:3px;background:#c2410c;color:#fff;font-weight:700;cursor:pointer}
-                .receipt{width:40ch;max-width:calc(100% - 8mm);margin:0 auto;padding:4mm 0;text-align:left;overflow-wrap:anywhere}
-                .receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}
-                h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
-                .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"----------------------------------------"}p{margin:3px 0;line-height:1.25}.ticket-main-info{font-size:15px;font-weight:700;line-height:1.18;margin:4px 0}
-                [data-ticket-qr]{width:36mm;height:36mm;margin:8px auto 4px}[data-ticket-qr] canvas,[data-ticket-qr] img{width:36mm!important;height:36mm!important;display:block}
-                .code{text-align:center;font-size:8px;word-break:break-all}.thanks{text-align:center;margin-top:8px;font-weight:700}
+                .receipt{width:54mm;max-width:calc(100% - 4mm);margin:0 auto;padding:2mm 0;text-align:center;overflow-wrap:anywhere}
+                .ticket-cinema,.ticket-movie,.ticket-session,.ticket-room{margin:0 0 2.2mm;font-weight:800;line-height:1.12}
+                .ticket-cinema{font-size:16px}.ticket-movie{font-size:17px;text-transform:uppercase}.ticket-session,.ticket-room{font-size:15px}
+                .ticket-price{display:flex;align-items:baseline;justify-content:space-between;gap:3mm;margin:1mm 0 2mm;font-size:13px;font-weight:800;text-transform:uppercase}
+                [data-ticket-qr]{width:34mm;height:34mm;margin:2mm auto 1mm}[data-ticket-qr] canvas,[data-ticket-qr] img{width:34mm!important;height:34mm!important;display:block}
+                .ticket-token,.ticket-sale{margin:1mm 0;text-align:center;font-size:8px;font-weight:800;line-height:1.15;word-break:break-all}
+                .ticket-notice{margin:3mm 0 0;text-align:center;font-size:9px;font-weight:800;line-height:1.2;text-transform:uppercase}
                 .receipt+.receipt{break-before:page;page-break-before:always}
-                @media print{.actions{display:none}.receipt{width:40ch;max-width:none;padding:0}.receipt+.receipt{break-before:page;page-break-before:always}@page{size:80mm auto;margin:3mm}}
+                @media print{.actions{display:none}.receipt{width:54mm;max-width:none;padding:0}.receipt+.receipt{break-before:page;page-break-before:always}@page{size:58mm auto;margin:2mm}}
             </style>
         </head>
         <body>
@@ -2586,26 +2576,15 @@ try {
             <?php foreach ($tickets as $ticket): ?>
                 <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
                 <main class="receipt">
-                    <?php if ($cinema['has_logo']): ?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif; ?>
-                    <h1><?= e($cinema['cinema_name']) ?></h1>
-                    <div class="company">
-                        <?php if ($cinema['cnpj']): ?>CNPJ <?= e($cinema['cnpj']) ?><br><?php endif; ?>
-                        <?php if ($cinema['address']): ?><?= nl2br(e($cinema['address'])) ?><br><?php endif; ?>
-                        <?= e($cinema['phone'] ?: $cinema['whatsapp']) ?>
-                    </div>
-                    <div class="line"></div>
-                    <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
-                    <p class="ticket-main-info"><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
-                    <p><strong>Classificação:</strong> <?= e(age_rating_label($ticket['age_rating'])) ?></p>
-                    <p class="ticket-main-info"><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
-                    <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
-                    <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
-                    <p><strong>Tipo:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?></p>
-                    <p><strong>Valor:</strong> R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
-                    <div class="line"></div>
+                    <p class="ticket-cinema"><?= e($cinema['cinema_name']) ?></p>
+                    <p class="ticket-movie"><?= e($ticket['movie_title']) ?></p>
+                    <p class="ticket-session">SESSÃO <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
+                    <p class="ticket-room"><?= e($ticket['room_name']) ?> - Poltrona: <?= e($ticket['seat_code']) ?></p>
+                    <div class="ticket-price"><strong><?= e($ticket['ticket_type'] ?? 'inteira') ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
                     <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
-                    <div class="code"><?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></div>
-                    <p class="thanks">Apresente este ingresso na entrada.</p>
+                    <p class="ticket-token">TOKEN: <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
+                    <p class="ticket-sale">VENDA: <?= e($ticket['sale_code']) ?></p>
+                    <p class="ticket-notice">INGRESSO VÁLIDO SOMENTE PARA A SESSÃO INDICADA.<br>Emitido em <?= e(date('d/m/Y', strtotime($ticket['sold_at']))) ?> às <?= e(date('H:i', strtotime($ticket['sold_at']))) ?></p>
                 </main>
             <?php endforeach; ?>
             <script src="/assets/js/vendor/qrcode.min.js"></script>
