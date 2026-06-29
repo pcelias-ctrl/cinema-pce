@@ -2480,7 +2480,7 @@ try {
             </div>
             <div class="ticket-stack">
                 <?php foreach ($tickets as $ticket): ?>
-                    <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
+                    <?php $qrValue = $ticket['qr_token'] ?: $ticket['sale_code']; ?>
                     <section class="ticket-print">
                         <h1><?= e($cinema['cinema_name']) ?></h1>
                         <p class="ticket-main-info"><strong>Filme:</strong> <?= e($ticket['movie_title']) ?></p>
@@ -2490,7 +2490,7 @@ try {
                         <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
                         <p><strong>Ingresso:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?> | R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
                         <div class="qr-ticket">
-                            <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
+                            <div data-ticket-qr data-url="<?= e($qrValue) ?>"></div>
                             <p><strong>Código:</strong> <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
                         </div>
                     </section>
@@ -2636,7 +2636,7 @@ try {
                 h1{margin:0 0 3px;text-align:center;font:700 15px/1.2 "Courier New",Courier,monospace}.company{text-align:center;margin-bottom:8px}
                 .line{height:1em;margin:5px 0;overflow:hidden}.line::before{content:"--------------------------------"}p{margin:3px 0;line-height:1.2}
                 .ticket-receipt{text-align:center}.ticket-cinema,.ticket-movie,.ticket-session,.ticket-room{margin:0 0 2.2mm;font-weight:800;line-height:1.12}
-                .ticket-cinema{font-size:16px}.ticket-movie{font-size:17px;text-transform:uppercase}.ticket-session,.ticket-room{font-size:15px}
+                .ticket-cinema{font-size:16px}.ticket-movie{font-size:17px;text-transform:uppercase}.ticket-session,.ticket-room{font-size:15px}.ticket-session{white-space:nowrap}
                 .ticket-price{display:flex;align-items:baseline;justify-content:space-between;gap:3mm;margin:1mm 0 2mm;font-size:13px;font-weight:800;text-transform:uppercase}
                 [data-ticket-qr]{width:34mm;height:34mm;margin:2mm auto 1mm}[data-ticket-qr] canvas,[data-ticket-qr] img{width:34mm!important;height:34mm!important;display:block}
                 .ticket-token,.ticket-sale{margin:1mm 0;text-align:center;font-size:8px;font-weight:800;line-height:1.15;word-break:break-all}
@@ -2649,14 +2649,14 @@ try {
         <body>
             <div class="actions"><button id="print-all" type="button">Imprimir ingressos e produtos</button></div>
             <?php foreach ($tickets as $ticket): ?>
-                <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
+                <?php $qrValue = $ticket['qr_token'] ?: $ticket['sale_code']; ?>
                 <main class="receipt ticket-receipt">
                     <p class="ticket-cinema"><?= e($cinema['cinema_name']) ?></p>
                     <p class="ticket-movie"><?= e($ticket['movie_title']) ?></p>
-                    <p class="ticket-session">SESSÃO <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
+                    <p class="ticket-session">SESSÃO: <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
                     <p class="ticket-room"><?= e($ticket['room_name']) ?> - Poltrona: <?= e($ticket['seat_code']) ?></p>
                     <div class="ticket-price"><strong><?= e($ticket['ticket_type'] ?? 'inteira') ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
-                    <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
+                    <div data-ticket-qr data-url="<?= e($qrValue) ?>"></div>
                     <p class="ticket-token">TOKEN: <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
                     <p class="ticket-sale">VENDA: <?= e($ticket['sale_code']) ?></p>
                     <p class="ticket-notice">INGRESSO VÁLIDO SOMENTE PARA A SESSÃO INDICADA.<br>Emitido em <?= e(date('d/m/Y', strtotime($ticket['sold_at']))) ?> às <?= e(date('H:i', strtotime($ticket['sold_at']))) ?></p>
@@ -2722,7 +2722,7 @@ try {
                 .actions button{padding:9px 14px;border:0;border-radius:3px;background:#c2410c;color:#fff;font-weight:700;cursor:pointer}
                 .receipt{width:54mm;max-width:calc(100% - 4mm);margin:0 auto;padding:2mm 0;text-align:center;overflow-wrap:anywhere}
                 .ticket-cinema,.ticket-movie,.ticket-session,.ticket-room{margin:0 0 2.2mm;font-weight:800;line-height:1.12}
-                .ticket-cinema{font-size:16px}.ticket-movie{font-size:17px;text-transform:uppercase}.ticket-session,.ticket-room{font-size:15px}
+                .ticket-cinema{font-size:16px}.ticket-movie{font-size:17px;text-transform:uppercase}.ticket-session,.ticket-room{font-size:15px}.ticket-session{white-space:nowrap}
                 .ticket-price{display:flex;align-items:baseline;justify-content:space-between;gap:3mm;margin:1mm 0 2mm;font-size:13px;font-weight:800;text-transform:uppercase}
                 [data-ticket-qr]{width:34mm;height:34mm;margin:2mm auto 1mm}[data-ticket-qr] canvas,[data-ticket-qr] img{width:34mm!important;height:34mm!important;display:block}
                 .ticket-token,.ticket-sale{margin:1mm 0;text-align:center;font-size:8px;font-weight:800;line-height:1.15;word-break:break-all}
@@ -2734,14 +2734,14 @@ try {
         <body>
             <div class="actions"><button id="print-tickets" type="button">Imprimir / salvar PDF</button></div>
             <?php foreach ($tickets as $ticket): ?>
-                <?php $validationUrl = app_url('ticket_validate', ['token' => $ticket['qr_token'] ?: $ticket['sale_code']]); ?>
+                <?php $qrValue = $ticket['qr_token'] ?: $ticket['sale_code']; ?>
                 <main class="receipt">
                     <p class="ticket-cinema"><?= e($cinema['cinema_name']) ?></p>
                     <p class="ticket-movie"><?= e($ticket['movie_title']) ?></p>
-                    <p class="ticket-session">SESSÃO <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
+                    <p class="ticket-session">SESSÃO: <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
                     <p class="ticket-room"><?= e($ticket['room_name']) ?> - Poltrona: <?= e($ticket['seat_code']) ?></p>
                     <div class="ticket-price"><strong><?= e($ticket['ticket_type'] ?? 'inteira') ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
-                    <div data-ticket-qr data-url="<?= e($validationUrl) ?>"></div>
+                    <div data-ticket-qr data-url="<?= e($qrValue) ?>"></div>
                     <p class="ticket-token">TOKEN: <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
                     <p class="ticket-sale">VENDA: <?= e($ticket['sale_code']) ?></p>
                     <p class="ticket-notice">INGRESSO VÁLIDO SOMENTE PARA A SESSÃO INDICADA.<br>Emitido em <?= e(date('d/m/Y', strtotime($ticket['sold_at']))) ?> às <?= e(date('H:i', strtotime($ticket['sold_at']))) ?></p>
