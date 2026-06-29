@@ -2092,7 +2092,7 @@ try {
                 <h2>ENCERRAMENTO DE SESSÃO</h2>
                 <p class="session"><?= e($showtime['movie_title']) ?></p>
                 <p class="session"><?= e($showtime['room_name']) ?></p>
-                <p class="session"><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(strtoupper($showtime['audio_type'])) ?> | <?= !empty($showtime['is_3d']) ? '3D' : '2D' ?></p>
+                <p class="session"><?= e(date('d/m/Y H:i', strtotime($showtime['starts_at']))) ?> | <?= e(strtoupper($showtime['audio_type'])) ?></p>
                 <div class="line"></div>
                 <div class="row"><span>MEIA</span><span><?= (int) $ticketCounts['meia'] ?></span></div>
                 <div class="row"><span>INTEIRA</span><span><?= (int) $ticketCounts['inteira'] ?></span></div>
