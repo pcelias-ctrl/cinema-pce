@@ -755,6 +755,19 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
 .sale-wizard-dialog > footer > .wizard-total-block { margin-right: auto; }
 .sale-wizard-dialog > footer span,.sale-wizard-dialog > footer strong { display: block; }
 .sale-wizard-dialog > footer strong { font-size: 23px; color: var(--brand-dark); }
+.voucher-payment { width: 250px; flex: 0 1 250px; }
+.voucher-payment > label { display: block; margin: 0 0 3px; font-size: 12px; font-weight: 800; }
+.voucher-payment > label small { color: var(--muted); font-weight: 600; }
+.voucher-input-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px; }
+.voucher-input-row input { min-width: 0; min-height: 38px; }
+.voucher-input-row .button { min-height: 38px; padding: 0 10px; }
+.voucher-used-list { display: flex; gap: 4px; max-width: 100%; margin-top: 4px; overflow-x: auto; }
+.voucher-used { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 3px 5px; border: 1px solid #b7d8c3; border-radius: 3px; background: #eef9f1; color: #14532d; font-size: 9px; }
+.voucher-used b { font-size: inherit; white-space: nowrap; }
+.voucher-used button { width: 18px; height: 18px; padding: 0; border: 0; background: transparent; color: #9f1239; font-size: 16px; line-height: 1; cursor: pointer; }
+.voucher-message { display: block; min-height: 13px; margin-top: 2px; color: #166534; font-size: 9px; }
+.voucher-message.error { color: #b42318; }
+.wizard-total-block > small { color: #166534; font-size: 10px; font-weight: 800; }
 .wizard-payment { display: flex; align-items: end; gap: 8px; }
 .wizard-payment label { width: 150px; margin: 0; }
 .wizard-payment select,.wizard-payment input { min-height: 38px; }
@@ -968,6 +981,7 @@ th { color: var(--muted); font-size: 11px; text-transform: uppercase; background
     .product-category-tree button.child { padding-left: 10px; }
     .product-picker { grid-template-columns: 1fr; }
     .sale-wizard-dialog > footer { flex-wrap: wrap; }
+    .voucher-payment { width: 100%; flex-basis: 100%; }
     .sale-wizard-dialog > footer > .wizard-total-block { width: 100%; margin-right: 0; }
     .wizard-payment { width: 100%; display: grid; grid-template-columns: 1fr 1fr auto; }
     .wizard-payment label { width: auto; }

@@ -168,6 +168,30 @@ CREATE TABLE cash_registers (
     CONSTRAINT fk_cash_registers_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE voucher_batches (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    quantity SMALLINT UNSIGNED NOT NULL,
+    valid_until DATE NOT NULL,
+    created_by INT UNSIGNED NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_voucher_batches_valid_until (valid_until),
+    CONSTRAINT fk_voucher_batches_user FOREIGN KEY (created_by) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE vouchers (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    batch_id INT UNSIGNED NOT NULL,
+    token VARCHAR(80) NOT NULL UNIQUE,
+    status ENUM('disponivel', 'utilizado', 'cancelado') NOT NULL DEFAULT 'disponivel',
+    used_ticket_id INT UNSIGNED NULL,
+    used_sale_code VARCHAR(40) NULL,
+    used_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_vouchers_batch_status (batch_id, status),
+    INDEX idx_vouchers_used_sale (used_sale_code),
+    CONSTRAINT fk_vouchers_batch FOREIGN KEY (batch_id) REFERENCES voucher_batches(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE tickets (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     showtime_id INT UNSIGNED NOT NULL,
@@ -179,6 +203,7 @@ CREATE TABLE tickets (
     buyer_name VARCHAR(160) NULL,
     payment_method ENUM('dinheiro', 'cartao', 'pix') NOT NULL,
     ticket_type ENUM('inteira', 'meia') NOT NULL DEFAULT 'inteira',
+    voucher_id BIGINT UNSIGNED NULL,
     unit_price DECIMAL(10,2) NOT NULL,
     total_amount DECIMAL(10,2) NOT NULL,
     amount_paid DECIMAL(10,2) NULL,
@@ -195,11 +220,13 @@ CREATE TABLE tickets (
     INDEX idx_tickets_room_seat (room_seat_id),
     INDEX idx_tickets_sale_code (sale_code),
     INDEX idx_tickets_qr_token (qr_token),
+    INDEX idx_tickets_voucher (voucher_id),
     CONSTRAINT fk_tickets_showtime FOREIGN KEY (showtime_id) REFERENCES showtimes(id),
     CONSTRAINT fk_tickets_room_seat FOREIGN KEY (room_seat_id) REFERENCES room_seats(id),
     CONSTRAINT fk_tickets_seller FOREIGN KEY (seller_user_id) REFERENCES users(id),
     CONSTRAINT fk_tickets_cash_register FOREIGN KEY (cash_register_id) REFERENCES cash_registers(id),
-    CONSTRAINT fk_tickets_checked_in_by FOREIGN KEY (checked_in_by) REFERENCES users(id)
+    CONSTRAINT fk_tickets_checked_in_by FOREIGN KEY (checked_in_by) REFERENCES users(id),
+    CONSTRAINT fk_tickets_voucher FOREIGN KEY (voucher_id) REFERENCES vouchers(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE product_sales (

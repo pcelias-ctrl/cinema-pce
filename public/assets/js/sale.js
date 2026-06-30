@@ -18,6 +18,13 @@
     const showtimeId = form.dataset.showtimeId || '';
     const statusUrl = form.dataset.seatStatusUrl || '';
     const holdUrl = form.dataset.seatHoldUrl || '';
+    const voucherLookupUrl = form.dataset.voucherLookupUrl || '';
+    const voucherInput = document.getElementById('voucher-code');
+    const voucherAdd = document.getElementById('voucher-add');
+    const voucherList = document.getElementById('voucher-used-list');
+    const voucherMessage = document.getElementById('voucher-message');
+    const voucherDiscountLabel = document.getElementById('voucher-discount');
+    const vouchers = new Map();
     let statusTimer = null;
     let holdRenewTimer = null;
     let saleSubmitting = false;
@@ -72,10 +79,94 @@
         }, 0);
     }
 
+    function selectedTicketPrices() {
+        return selectedSeats()
+            .map((input) => input.dataset.ticketType === 'meia' ? halfPrice : fullPrice)
+            .sort((left, right) => right - left);
+    }
+
+    function voucherDiscount() {
+        return selectedTicketPrices()
+            .slice(0, vouchers.size)
+            .reduce((sum, price) => sum + price, 0);
+    }
+
+    function setVoucherMessage(message, error) {
+        if (!voucherMessage) return;
+        voucherMessage.textContent = message || '';
+        voucherMessage.classList.toggle('error', Boolean(error));
+    }
+
+    function renderVouchers() {
+        if (!voucherList) return;
+        voucherList.replaceChildren();
+        vouchers.forEach((voucher, token) => {
+            const item = document.createElement('span');
+            item.className = 'voucher-used';
+            const text = document.createElement('b');
+            text.textContent = `Voucher ...${token.slice(-8)} · até ${voucher.validUntil}`;
+            const hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = 'voucher_tokens[]';
+            hidden.value = token;
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.setAttribute('aria-label', `Remover voucher ${token}`);
+            remove.textContent = '×';
+            remove.addEventListener('click', () => {
+                vouchers.delete(token);
+                renderVouchers();
+                setVoucherMessage('');
+                update();
+            });
+            item.append(text, hidden, remove);
+            voucherList.append(item);
+        });
+    }
+
+    async function addVoucher() {
+        if (!voucherInput || !voucherLookupUrl) return;
+        const match = voucherInput.value.trim().toUpperCase().match(/VCH-[A-F0-9]{20}/);
+        const token = match ? match[0] : voucherInput.value.trim().toUpperCase();
+        if (!token) {
+            setVoucherMessage('Leia ou digite o código do voucher.', true);
+            return;
+        }
+        if (vouchers.has(token)) {
+            setVoucherMessage('Este voucher já foi adicionado.', true);
+            voucherInput.select();
+            return;
+        }
+        if (vouchers.size >= selectedSeats().length) {
+            setVoucherMessage('Cada voucher vale um ingresso. Não há outro ingresso selecionado.', true);
+            return;
+        }
+
+        voucherAdd.disabled = true;
+        setVoucherMessage('Validando voucher...');
+        try {
+            const response = await fetch(`${voucherLookupUrl}&token=${encodeURIComponent(token)}`, { credentials: 'same-origin' });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) throw new Error(payload.message || 'Voucher inválido.');
+            vouchers.set(payload.token, { validUntil: payload.valid_until });
+            voucherInput.value = '';
+            renderVouchers();
+            setVoucherMessage('Voucher aceito.');
+            update();
+            voucherInput.focus();
+        } catch (error) {
+            setVoucherMessage(error.message || 'Não foi possível validar o voucher.', true);
+            voucherInput.select();
+        } finally {
+            voucherAdd.disabled = false;
+        }
+    }
+
     function update() {
         const selected = selectedSeats();
-        const ticketTotal = selected.reduce((sum, input) => sum + (input.dataset.ticketType === 'meia' ? halfPrice : fullPrice), 0);
-        const total = ticketTotal + productTotal();
+        const ticketTotal = selectedTicketPrices().reduce((sum, price) => sum + price, 0);
+        const discount = voucherDiscount();
+        const total = Math.max(0, ticketTotal - discount) + productTotal();
         const seatCodes = selected.map((input) => {
             const code = input.closest('.sale-seat').querySelector('span').textContent;
             return `${code} (${input.dataset.ticketType === 'meia' ? 'M' : 'I'})`;
@@ -83,13 +174,14 @@
         seatsLabel.textContent = seatCodes.length ? seatCodes.join(', ') : 'Nenhuma';
         totalLabel.textContent = money(total);
         if (wizardTotal) wizardTotal.textContent = money(total);
+        if (voucherDiscountLabel) voucherDiscountLabel.textContent = discount > 0 ? `Vouchers: - ${money(discount)}` : '';
 
         const isCash = method.value === 'dinheiro';
         amountRow.style.display = isCash ? 'grid' : 'none';
         changeRow.style.display = isCash ? 'block' : 'none';
         const paid = isCash ? parseMoney(amountPaid.value) : total;
         changeLabel.textContent = money(Math.max(0, paid - total));
-        const blocked = selected.length === 0 || (isCash && paid < total);
+        const blocked = selected.length === 0 || vouchers.size > selected.length || (isCash && paid < total);
         finishButton.disabled = blocked;
         continueButton.disabled = selected.length === 0;
     }
@@ -192,6 +284,12 @@
     }
     document.getElementById('close-wizard').addEventListener('click', closeWizard);
     document.getElementById('back-to-seats').addEventListener('click', closeWizard);
+    voucherAdd?.addEventListener('click', addVoucher);
+    voucherInput?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        addVoucher();
+    });
     form.querySelectorAll('.product-category-tree button').forEach((button) => {
         button.addEventListener('click', () => {
             form.querySelectorAll('.product-category-tree button').forEach((item) => item.classList.toggle('active', item === button));

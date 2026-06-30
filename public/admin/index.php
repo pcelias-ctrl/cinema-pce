@@ -70,6 +70,7 @@ function layout(string $title, callable $content): void
                                 <li class="nav-item"><a class="nav-link <?= $navClass('showtimes') ?>" href="index.php?route=showtimes"><i></i><p>Sessões</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('product_categories') ?>" href="index.php?route=product_categories"><i></i><p>Categorias</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('products') ?>" href="index.php?route=products"><i></i><p>Produtos</p></a></li>
+                                <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['vouchers', 'voucher_print'], true) ? 'active' : '' ?>" href="index.php?route=vouchers"><i></i><p>Vouchers</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('product_report') ?>" href="index.php?route=product_report"><i></i><p>Relatório de Produtos</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('users') ?>" href="index.php?route=users"><i></i><p>Usuários</p></a></li>
                                 <li class="nav-item"><a class="nav-link <?= $navClass('cinema_settings') ?>" href="index.php?route=cinema_settings"><i></i><p>Cinema</p></a></li>
@@ -359,6 +360,20 @@ function ticket_token(): string
     return bin2hex(random_bytes(24));
 }
 
+function voucher_token(): string
+{
+    return 'VCH-' . strtoupper(bin2hex(random_bytes(10)));
+}
+
+function normalize_voucher_token(string $value): string
+{
+    $value = strtoupper(trim($value));
+    if (preg_match('/VCH-[A-F0-9]{20}/', $value, $match)) {
+        return $match[0];
+    }
+    return $value;
+}
+
 function app_url(string $route, array $params = []): string
 {
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
@@ -548,6 +563,44 @@ function ensure_showtime_closure_columns(): void
     }
     if (!db()->query("SHOW COLUMNS FROM showtimes LIKE 'closed_by'")->fetch()) {
         db()->exec('ALTER TABLE showtimes ADD COLUMN closed_by INT UNSIGNED NULL AFTER closed_at');
+    }
+
+    $ready = true;
+}
+
+function ensure_voucher_tables(): void
+{
+    static $ready = false;
+    if ($ready) return;
+
+    db()->exec("CREATE TABLE IF NOT EXISTS voucher_batches (
+        id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        quantity SMALLINT UNSIGNED NOT NULL,
+        valid_until DATE NOT NULL,
+        created_by INT UNSIGNED NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_voucher_batches_valid_until (valid_until),
+        CONSTRAINT fk_voucher_batches_user FOREIGN KEY (created_by) REFERENCES users(id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    db()->exec("CREATE TABLE IF NOT EXISTS vouchers (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        batch_id INT UNSIGNED NOT NULL,
+        token VARCHAR(80) NOT NULL UNIQUE,
+        status ENUM('disponivel','utilizado','cancelado') NOT NULL DEFAULT 'disponivel',
+        used_ticket_id INT UNSIGNED NULL,
+        used_sale_code VARCHAR(40) NULL,
+        used_at DATETIME NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_vouchers_batch_status (batch_id, status),
+        INDEX idx_vouchers_used_sale (used_sale_code),
+        CONSTRAINT fk_vouchers_batch FOREIGN KEY (batch_id) REFERENCES voucher_batches(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    if (!db()->query("SHOW COLUMNS FROM tickets LIKE 'voucher_id'")->fetch()) {
+        db()->exec('ALTER TABLE tickets ADD COLUMN voucher_id BIGINT UNSIGNED NULL AFTER ticket_type');
+    }
+    if (!db()->query("SHOW INDEX FROM tickets WHERE Key_name='idx_tickets_voucher'")->fetch()) {
+        db()->exec('ALTER TABLE tickets ADD INDEX idx_tickets_voucher (voucher_id)');
     }
 
     $ready = true;
@@ -855,6 +908,9 @@ try {
     if (in_array($route, ['showtimes', 'sales', 'sale_new', 'showtime_close', 'showtime_report'], true)) {
         ensure_showtime_closure_columns();
     }
+    if (in_array($route, ['vouchers', 'voucher_print', 'voucher_lookup', 'sale_new', 'ticket_receipt', 'ticket_cancel', 'ticket_print', 'sale_receipt_print', 'showtime_report'], true)) {
+        ensure_voucher_tables();
+    }
     if (in_array($route, ['rooms', 'room_new', 'room_edit', 'sales', 'sale_new', 'ticket_receipt', 'ticket_cancel'], true)) {
         ensure_room_seat_availability_columns();
     }
@@ -1050,6 +1106,188 @@ try {
         header('Content-Type: ' . $image['image_mime']);
         header('Cache-Control: private, max-age=86400');
         echo $image['image_data'];
+        exit;
+    }
+
+    if ($route === 'voucher_lookup') {
+        Auth::requireLogin();
+        header('Content-Type: application/json; charset=utf-8');
+        $token = normalize_voucher_token($_GET['token'] ?? '');
+        if ($token === '') {
+            http_response_code(422);
+            echo json_encode(['ok' => false, 'message' => 'Informe o código do voucher.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $stmt = db()->prepare(
+            "SELECT vouchers.id, vouchers.token, vouchers.status, voucher_batches.valid_until
+             FROM vouchers
+             INNER JOIN voucher_batches ON voucher_batches.id=vouchers.batch_id
+             WHERE vouchers.token=?
+             LIMIT 1"
+        );
+        $stmt->execute([$token]);
+        $voucher = $stmt->fetch();
+        if (!$voucher) {
+            http_response_code(404);
+            echo json_encode(['ok' => false, 'message' => 'Voucher não encontrado.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($voucher['status'] !== 'disponivel') {
+            http_response_code(409);
+            echo json_encode(['ok' => false, 'message' => $voucher['status'] === 'utilizado' ? 'Voucher já utilizado.' : 'Voucher cancelado.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        if ($voucher['valid_until'] < date('Y-m-d')) {
+            http_response_code(410);
+            echo json_encode(['ok' => false, 'message' => 'Voucher vencido em ' . date('d/m/Y', strtotime($voucher['valid_until'])) . '.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        echo json_encode(['ok' => true, 'token' => $voucher['token'], 'valid_until' => date('d/m/Y', strtotime($voucher['valid_until']))], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($route === 'voucher_print') {
+        Auth::requireAdmin();
+        $batchId = (int) ($_GET['batch_id'] ?? 0);
+        $stmt = db()->prepare(
+            'SELECT vouchers.token, voucher_batches.id batch_id, voucher_batches.valid_until
+             FROM vouchers
+             INNER JOIN voucher_batches ON voucher_batches.id=vouchers.batch_id
+             WHERE voucher_batches.id=?
+             ORDER BY vouchers.id'
+        );
+        $stmt->execute([$batchId]);
+        $vouchers = $stmt->fetchAll();
+        if (!$vouchers) {
+            http_response_code(404);
+            exit('Lote de vouchers não encontrado.');
+        }
+        $cinema = cinema_settings();
+        ?>
+        <!doctype html>
+        <html lang="pt-br">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>Vouchers - lote <?= $batchId ?></title>
+            <style>
+                *{box-sizing:border-box}html,body{margin:0;background:#fff;color:#000}
+                body{font-family:Arial,sans-serif}.actions{padding:10px;text-align:center;background:#eee}.actions button{padding:8px 12px;border:0;background:#222;color:#fff;font-weight:700}
+                .voucher-label{width:50mm;height:30mm;display:grid;grid-template-columns:21mm minmax(0,1fr);align-items:center;gap:1.5mm;padding:1.5mm;overflow:hidden;background:#fff}
+                .voucher-label+.voucher-label{break-before:page;page-break-before:always}
+                [data-ticket-qr]{width:20mm;height:20mm}[data-ticket-qr] canvas,[data-ticket-qr] img{display:block;width:20mm!important;height:20mm!important}
+                .voucher-copy{min-width:0;text-align:center}.voucher-copy strong,.voucher-copy span,.voucher-copy small{display:block}
+                .voucher-copy .cinema{font-size:7px;line-height:1.05;text-transform:uppercase}.voucher-copy .title{margin-top:1mm;font-size:11px;line-height:1;text-transform:uppercase}
+                .voucher-copy .admission{margin-top:.7mm;font-size:8px}.voucher-copy .validity{margin-top:1mm;font-size:8px}.voucher-copy .token{margin-top:.8mm;font:700 5.5px/1 monospace;overflow-wrap:anywhere}
+                @media print{.actions{display:none}@page{size:50mm 30mm;margin:0}.voucher-label{break-after:page;page-break-after:always}.voucher-label:last-of-type{break-after:auto;page-break-after:auto}}
+            </style>
+        </head>
+        <body>
+            <div class="actions"><button id="print-vouchers" type="button">Imprimir etiquetas</button></div>
+            <?php foreach ($vouchers as $voucher): ?>
+                <main class="voucher-label">
+                    <div data-ticket-qr data-url="<?= e($voucher['token']) ?>"></div>
+                    <div class="voucher-copy">
+                        <strong class="cinema"><?= e($cinema['cinema_name']) ?></strong>
+                        <strong class="title">VOUCHER</strong>
+                        <span class="admission">1 INGRESSO</span>
+                        <strong class="validity">VÁLIDO ATÉ<br><?= e(date('d/m/Y', strtotime($voucher['valid_until']))) ?></strong>
+                        <small class="token"><?= e($voucher['token']) ?></small>
+                    </div>
+                </main>
+            <?php endforeach; ?>
+            <script src="/assets/js/vendor/qrcode.min.js"></script>
+            <script src="/assets/js/ticket-qr.js"></script>
+            <script>
+                const printVouchers = async () => {
+                    await (window.ticketQrReady || Promise.resolve());
+                    window.print();
+                };
+                document.getElementById('print-vouchers').addEventListener('click', printVouchers);
+                window.addEventListener('load', () => window.setTimeout(printVouchers, 250));
+            </script>
+        </body>
+        </html>
+        <?php
+        exit;
+    }
+
+    if ($route === 'vouchers') {
+        Auth::requireAdmin();
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            $quantity = max(1, min(500, (int) ($_POST['quantity'] ?? 0)));
+            $validUntil = trim($_POST['valid_until'] ?? '');
+            $date = DateTime::createFromFormat('!Y-m-d', $validUntil);
+            if (!$date || $date->format('Y-m-d') !== $validUntil || $validUntil < date('Y-m-d')) {
+                throw new RuntimeException('Informe uma validade igual ou posterior a hoje.');
+            }
+
+            db()->beginTransaction();
+            try {
+                $batch = db()->prepare('INSERT INTO voucher_batches(quantity,valid_until,created_by) VALUES(?,?,?)');
+                $batch->execute([$quantity, $validUntil, (int) Auth::user()['id']]);
+                $batchId = (int) db()->lastInsertId();
+                $insert = db()->prepare('INSERT INTO vouchers(batch_id,token) VALUES(?,?)');
+                for ($i = 0; $i < $quantity; $i++) {
+                    $insert->execute([$batchId, voucher_token()]);
+                }
+                db()->commit();
+            } catch (Throwable $exception) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $exception;
+            }
+            header('Location: index.php?route=vouchers&created=' . $batchId);
+            exit;
+        }
+
+        $batches = db()->query(
+            "SELECT voucher_batches.*, users.name created_by_name,
+                COUNT(vouchers.id) total,
+                SUM(vouchers.status='disponivel' AND voucher_batches.valid_until>=CURDATE()) available,
+                SUM(vouchers.status='utilizado') used,
+                SUM(vouchers.status='cancelado') canceled
+             FROM voucher_batches
+             INNER JOIN users ON users.id=voucher_batches.created_by
+             LEFT JOIN vouchers ON vouchers.batch_id=voucher_batches.id
+             GROUP BY voucher_batches.id, users.name
+             ORDER BY voucher_batches.id DESC
+             LIMIT 100"
+        )->fetchAll();
+        $createdBatch = (int) ($_GET['created'] ?? 0);
+        layout('Vouchers', function () use ($batches, $createdBatch) {
+            ?>
+            <div class="section-head"><div><h1>Vouchers de ingressos</h1><p class="muted">Cada voucher concede um ingresso cortesia e pode ser utilizado uma única vez.</p></div></div>
+            <?php if ($createdBatch): ?><p class="alert success">Lote criado. As etiquetas estão prontas para impressão.</p><?php endif; ?>
+            <form method="post" class="panel form">
+                <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                <div class="columns compact">
+                    <label>Quantidade<input name="quantity" type="number" min="1" max="500" value="30" required></label>
+                    <label>Válidos até<input name="valid_until" type="date" min="<?= e(date('Y-m-d')) ?>" required></label>
+                </div>
+                <button class="button primary">Gerar vouchers</button>
+            </form>
+            <div class="panel">
+                <table>
+                    <thead><tr><th>Lote</th><th>Criação</th><th>Validade</th><th>Total</th><th>Disponíveis</th><th>Utilizados</th><th></th></tr></thead>
+                    <tbody>
+                    <?php foreach ($batches as $batch): ?>
+                        <tr>
+                            <td><strong>#<?= (int) $batch['id'] ?></strong><br><small><?= e($batch['created_by_name']) ?></small></td>
+                            <td><?= e(date('d/m/Y H:i', strtotime($batch['created_at']))) ?></td>
+                            <td><?= e(date('d/m/Y', strtotime($batch['valid_until']))) ?></td>
+                            <td><?= (int) $batch['total'] ?></td>
+                            <td><?= (int) $batch['available'] ?></td>
+                            <td><?= (int) $batch['used'] ?></td>
+                            <td><a class="button <?= $createdBatch === (int) $batch['id'] ? 'primary' : '' ?>" href="index.php?route=voucher_print&batch_id=<?= (int) $batch['id'] ?>" target="_blank" rel="noopener">Imprimir etiquetas</a></td>
+                        </tr>
+                    <?php endforeach; ?>
+                    <?php if (!$batches): ?><tr><td colspan="7">Nenhum lote gerado.</td></tr><?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php
+        });
         exit;
     }
 
@@ -2048,17 +2286,19 @@ try {
         }
 
         $totalsStmt = db()->prepare(
-            "SELECT ticket_type, payment_method, COUNT(*) quantity, COALESCE(SUM(unit_price),0) total
+            "SELECT ticket_type, payment_method, COUNT(*) quantity, SUM(voucher_id IS NOT NULL) vouchers, COALESCE(SUM(unit_price),0) total
              FROM tickets
              WHERE showtime_id=? AND status='vendido'
              GROUP BY ticket_type, payment_method"
         );
         $totalsStmt->execute([$showtimeId]);
         $ticketCounts = ['meia' => 0, 'inteira' => 0];
+        $voucherCount = 0;
         $paymentTotals = ['dinheiro' => 0.0, 'cartao' => 0.0, 'pix' => 0.0];
         foreach ($totalsStmt->fetchAll() as $row) {
             $ticketType = $row['ticket_type'] === 'meia' ? 'meia' : 'inteira';
             $ticketCounts[$ticketType] += (int) $row['quantity'];
+            $voucherCount += (int) $row['vouchers'];
             if (array_key_exists($row['payment_method'], $paymentTotals)) {
                 $paymentTotals[$row['payment_method']] += (float) $row['total'];
             }
@@ -2096,6 +2336,7 @@ try {
                 <div class="line"></div>
                 <div class="row"><span>MEIA</span><span><?= (int) $ticketCounts['meia'] ?></span></div>
                 <div class="row"><span>INTEIRA</span><span><?= (int) $ticketCounts['inteira'] ?></span></div>
+                <div class="row"><span>VOUCHERS UTILIZADOS</span><span><?= (int) $voucherCount ?></span></div>
                 <div class="row"><span>TOTAL DE INGRESSOS</span><span><?= (int) $ticketTotal ?></span></div>
                 <div class="line"></div>
                 <div class="row"><span>DINHEIRO</span><span>R$ <?= e(number_format($paymentTotals['dinheiro'], 2, ',', '.')) ?></span></div>
@@ -2215,6 +2456,15 @@ try {
                 $ticketTypes[$seatId] = $ticketType;
                 $ticketTotal += $ticketType === 'meia' ? $halfPrice : $fullPrice;
             }
+            $voucherTokens = [];
+            foreach ((array) ($_POST['voucher_tokens'] ?? []) as $voucherToken) {
+                $voucherToken = normalize_voucher_token((string) $voucherToken);
+                if ($voucherToken !== '') $voucherTokens[$voucherToken] = $voucherToken;
+            }
+            $voucherTokens = array_values($voucherTokens);
+            if (count($voucherTokens) > count($seatIds)) {
+                throw new RuntimeException('Cada voucher vale um ingresso. Remova os vouchers excedentes.');
+            }
             $productQuantities = [];
             $adminProductsEnabled = (int) (cinema_settings()['admin_products_enabled'] ?? 1) === 1;
             foreach ($adminProductsEnabled ? (array) ($_POST['product_qty'] ?? []) : [] as $productId => $quantity) {
@@ -2255,6 +2505,52 @@ try {
                 throw new RuntimeException('Uma ou mais poltronas já foram vendidas. Atualize a tela e escolha novamente.');
             }
 
+            $voucherRows = [];
+            if ($voucherTokens) {
+                $voucherPlaceholders = implode(',', array_fill(0, count($voucherTokens), '?'));
+                $voucherStmt = db()->prepare(
+                    "SELECT vouchers.id, vouchers.token, vouchers.status, voucher_batches.valid_until
+                     FROM vouchers
+                     INNER JOIN voucher_batches ON voucher_batches.id=vouchers.batch_id
+                     WHERE vouchers.token IN ($voucherPlaceholders)
+                     FOR UPDATE"
+                );
+                $voucherStmt->execute($voucherTokens);
+                foreach ($voucherStmt->fetchAll() as $voucher) {
+                    $voucherRows[$voucher['token']] = $voucher;
+                }
+                if (count($voucherRows) !== count($voucherTokens)) {
+                    throw new RuntimeException('Um dos vouchers não foi encontrado.');
+                }
+                foreach ($voucherTokens as $voucherToken) {
+                    $voucher = $voucherRows[$voucherToken];
+                    if ($voucher['status'] !== 'disponivel') {
+                        throw new RuntimeException('O voucher ' . $voucherToken . ' já foi utilizado ou cancelado.');
+                    }
+                    if ($voucher['valid_until'] < date('Y-m-d')) {
+                        throw new RuntimeException('O voucher ' . $voucherToken . ' está vencido.');
+                    }
+                }
+            }
+
+            $pricedSeats = [];
+            foreach ($availableSeats as $seat) {
+                $ticketType = $ticketTypes[(int) $seat['id']] ?? 'inteira';
+                $pricedSeats[] = [
+                    'seat_id' => (int) $seat['id'],
+                    'price' => $ticketType === 'meia' ? $halfPrice : $fullPrice,
+                ];
+            }
+            usort($pricedSeats, static fn(array $left, array $right): int => $right['price'] <=> $left['price']);
+            $voucherAssignments = [];
+            $voucherDiscount = 0.0;
+            foreach ($voucherTokens as $index => $voucherToken) {
+                $seatPrice = $pricedSeats[$index];
+                $voucherAssignments[$seatPrice['seat_id']] = $voucherRows[$voucherToken];
+                $voucherDiscount += (float) $seatPrice['price'];
+            }
+            $payableTicketTotal = max(0, $ticketTotal - $voucherDiscount);
+
             $productRows = [];
             $productTotal = 0.0;
             if ($productQuantities) {
@@ -2270,19 +2566,25 @@ try {
                     $productTotal += (float) $product['price'] * $quantity;
                 }
             }
-            $grandTotal = $ticketTotal + $productTotal;
+            $grandTotal = $payableTicketTotal + $productTotal;
             $changeAmount = $paymentMethod === 'dinheiro' ? max(0, $amountPaid - $grandTotal) : 0;
             if ($paymentMethod === 'dinheiro' && $amountPaid < $grandTotal) throw new RuntimeException('Valor recebido em dinheiro é menor que o total da venda.');
 
             $code = sale_code();
             $insert = db()->prepare(
-                'INSERT INTO tickets (showtime_id, room_seat_id, seller_user_id, cash_register_id, sale_code, qr_token, buyer_name, payment_method, ticket_type, unit_price, total_amount, amount_paid, change_amount, status, sold_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "vendido", NOW())'
+                'INSERT INTO tickets (showtime_id, room_seat_id, seller_user_id, cash_register_id, sale_code, qr_token, buyer_name, payment_method, ticket_type, voucher_id, unit_price, total_amount, amount_paid, change_amount, status, sold_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "vendido", NOW())'
+            );
+            $redeemVoucher = db()->prepare(
+                "UPDATE vouchers
+                 SET status='utilizado', used_ticket_id=?, used_sale_code=?, used_at=NOW()
+                 WHERE id=? AND status='disponivel'"
             );
             foreach ($availableSeats as $seat) {
                 $qrToken = ticket_token();
                 $ticketType = $ticketTypes[(int) $seat['id']] ?? 'inteira';
-                $unitPrice = $ticketType === 'meia' ? $halfPrice : $fullPrice;
+                $voucher = $voucherAssignments[(int) $seat['id']] ?? null;
+                $unitPrice = $voucher ? 0.0 : ($ticketType === 'meia' ? $halfPrice : $fullPrice);
                 $insert->execute([
                     $showtimeId,
                     (int) $seat['id'],
@@ -2293,11 +2595,18 @@ try {
                     $buyerName ?: null,
                     $paymentMethod,
                     $ticketType,
+                    $voucher ? (int) $voucher['id'] : null,
                     $unitPrice,
-                    $ticketTotal,
+                    $payableTicketTotal,
                     $paymentMethod === 'dinheiro' ? $amountPaid : $grandTotal,
                     $changeAmount,
                 ]);
+                if ($voucher) {
+                    $redeemVoucher->execute([(int) db()->lastInsertId(), $code, (int) $voucher['id']]);
+                    if ($redeemVoucher->rowCount() !== 1) {
+                        throw new RuntimeException('O voucher ' . $voucher['token'] . ' foi utilizado em outro terminal.');
+                    }
+                }
             }
             if ($productRows) {
                 $productSale = db()->prepare('INSERT INTO product_sales (sale_code, seller_user_id, cash_register_id, payment_method, total_amount, sold_at) VALUES (?, ?, ?, ?, ?, NOW())');
@@ -2359,7 +2668,7 @@ try {
             ?>
             <?php if (!empty($_GET['seat_conflict'])): ?><p class="sale-conflict">Uma poltrona foi vendida em outro terminal. O mapa foi atualizado; selecione outra.</p><?php endif; ?>
             <p class="sale-conflict" id="sale-seat-notice" hidden></p>
-            <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>" data-showtime-id="<?= (int) $showtime['id'] ?>" data-seat-status-url="index.php?route=sale_seat_status" data-seat-hold-url="index.php?route=sale_seat_hold">
+            <form method="post" class="sale-layout sale-workbench" id="sale-form" data-full-price="<?= e($showtime['price']) ?>" data-half-price="<?= e($showtime['half_price'] ?? $showtime['price'] / 2) ?>" data-showtime-id="<?= (int) $showtime['id'] ?>" data-seat-status-url="index.php?route=sale_seat_status" data-seat-hold-url="index.php?route=sale_seat_hold" data-voucher-lookup-url="index.php?route=voucher_lookup">
                 <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
                 <input type="hidden" name="showtime_id" value="<?= (int) $showtime['id'] ?>">
                 <section class="panel sale-map-panel">
@@ -2431,7 +2740,13 @@ try {
                             </div><?php else: ?><div class="panel"><p class="muted">Venda de delícias desativada nas configurações do cinema.</p></div><?php endif; ?>
                         </div>
                         <footer>
-                            <div class="wizard-total-block"><span>Ingressos + produtos</span><strong id="wizard-total">R$ 0,00</strong></div>
+                            <div class="voucher-payment">
+                                <label for="voucher-code">Voucher <small>1 por ingresso</small></label>
+                                <div class="voucher-input-row"><input id="voucher-code" type="text" autocomplete="off" placeholder="Leia ou digite o código"><button class="button" type="button" id="voucher-add">Usar</button></div>
+                                <div class="voucher-used-list" id="voucher-used-list"></div>
+                                <small class="voucher-message" id="voucher-message"></small>
+                            </div>
+                            <div class="wizard-total-block"><span>Ingressos + produtos</span><small id="voucher-discount"></small><strong id="wizard-total">R$ 0,00</strong></div>
                             <div class="wizard-payment">
                                 <label>Forma de pagamento<select name="payment_method" id="payment-method"><option value="dinheiro">Dinheiro</option><option value="cartao">Cartão</option><option value="pix">Pix</option></select></label>
                                 <label id="amount-paid-row">Valor recebido<input name="amount_paid" id="amount-paid" inputmode="decimal" placeholder="Ex: 100,00"></label>
@@ -2488,7 +2803,7 @@ try {
                         <p class="ticket-main-info"><strong>Sala:</strong> <?= e($ticket['room_name']) ?></p>
                         <p><strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?> | <?= e(ucfirst($ticket['audio_type'])) ?></p>
                         <p><strong>Poltrona:</strong> <?= e($ticket['seat_code']) ?></p>
-                        <p><strong>Ingresso:</strong> <?= e(ucfirst($ticket['ticket_type'] ?? 'inteira')) ?> | R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
+                        <p><strong>Ingresso:</strong> <?= e(!empty($ticket['voucher_id']) ? 'Cortesia' : ucfirst($ticket['ticket_type'] ?? 'inteira')) ?> | R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></p>
                         <div class="qr-ticket">
                             <div data-ticket-qr data-url="<?= e($qrValue) ?>"></div>
                             <p><strong>Código:</strong> <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
@@ -2544,7 +2859,7 @@ try {
             if ($ticketToken === '') throw new RuntimeException('Informe o token do ingresso.');
             db()->beginTransaction();
             try {
-                $lock = db()->prepare('SELECT id, status FROM tickets WHERE qr_token=? LIMIT 1 FOR UPDATE');
+                $lock = db()->prepare('SELECT id, status, voucher_id FROM tickets WHERE qr_token=? LIMIT 1 FOR UPDATE');
                 $lock->execute([$ticketToken]);
                 $lockedTicket = $lock->fetch();
                 if (!$lockedTicket) throw new RuntimeException('Ingresso não encontrado.');
@@ -2557,6 +2872,14 @@ try {
                 );
                 $cancelTicket->execute([(int) Auth::user()['id'], $reason ?: null, (int) $lockedTicket['id']]);
                 if ($cancelTicket->rowCount() !== 1) throw new RuntimeException('Não foi possível cancelar o ingresso.');
+                if (!empty($lockedTicket['voucher_id'])) {
+                    $releaseVoucher = db()->prepare(
+                        "UPDATE vouchers
+                         SET status='disponivel', used_ticket_id=NULL, used_sale_code=NULL, used_at=NULL
+                         WHERE id=? AND status='utilizado'"
+                    );
+                    $releaseVoucher->execute([(int) $lockedTicket['voucher_id']]);
+                }
 
                 db()->commit();
                 header('Location: index.php?route=ticket_cancel&ticket_token=' . urlencode($ticketToken) . '&canceled=1');
@@ -2590,7 +2913,7 @@ try {
                     <p><strong>Venda:</strong> <?= e($ticket['sale_code']) ?></p>
                     <p><strong>Sala:</strong> <?= e($ticket['room_name']) ?> | <strong>Sessão:</strong> <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
                     <table><thead><tr><th>Poltrona</th><th>Tipo</th><th>Valor</th><th>Status</th></tr></thead><tbody>
-                        <tr><td><?= e($ticket['seat_code']) ?></td><td><?= e(ucfirst($ticket['ticket_type'])) ?></td><td>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></td><td><span class="status-badge <?= $ticket['status'] === 'vendido' ? 'active' : 'inactive' ?>"><?= e(ucfirst($ticket['status'])) ?></span></td></tr>
+                        <tr><td><?= e($ticket['seat_code']) ?></td><td><?= e(!empty($ticket['voucher_id']) ? 'Cortesia' : ucfirst($ticket['ticket_type'])) ?></td><td>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></td><td><span class="status-badge <?= $ticket['status'] === 'vendido' ? 'active' : 'inactive' ?>"><?= e(ucfirst($ticket['status'])) ?></span></td></tr>
                     </tbody></table>
                     <?php if ($ticket['status'] === 'vendido'): ?>
                         <form method="post" class="form" onsubmit="return confirm('Confirmar o cancelamento deste ingresso? A poltrona voltará para venda.')">
@@ -2655,7 +2978,7 @@ try {
                     <p class="ticket-movie"><?= e($ticket['movie_title']) ?></p>
                     <p class="ticket-session">SESSÃO: <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
                     <p class="ticket-room"><?= e($ticket['room_name']) ?> - Poltrona: <?= e($ticket['seat_code']) ?></p>
-                    <div class="ticket-price"><strong><?= e($ticket['ticket_type'] ?? 'inteira') ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
+                    <div class="ticket-price"><strong><?= e(!empty($ticket['voucher_id']) ? 'cortesia' : ($ticket['ticket_type'] ?? 'inteira')) ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
                     <div data-ticket-qr data-url="<?= e($qrValue) ?>"></div>
                     <p class="ticket-token">TOKEN: <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
                     <p class="ticket-sale">VENDA: <?= e($ticket['sale_code']) ?></p>
@@ -2740,7 +3063,7 @@ try {
                     <p class="ticket-movie"><?= e($ticket['movie_title']) ?></p>
                     <p class="ticket-session">SESSÃO: <?= e(date('d/m/Y H:i', strtotime($ticket['starts_at']))) ?></p>
                     <p class="ticket-room"><?= e($ticket['room_name']) ?> - Poltrona: <?= e($ticket['seat_code']) ?></p>
-                    <div class="ticket-price"><strong><?= e($ticket['ticket_type'] ?? 'inteira') ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
+                    <div class="ticket-price"><strong><?= e(!empty($ticket['voucher_id']) ? 'cortesia' : ($ticket['ticket_type'] ?? 'inteira')) ?></strong><strong>R$ <?= e(number_format((float) $ticket['unit_price'], 2, ',', '.')) ?></strong></div>
                     <div data-ticket-qr data-url="<?= e($qrValue) ?>"></div>
                     <p class="ticket-token">TOKEN: <?= e($ticket['qr_token'] ?: $ticket['sale_code']) ?></p>
                     <p class="ticket-sale">VENDA: <?= e($ticket['sale_code']) ?></p>
