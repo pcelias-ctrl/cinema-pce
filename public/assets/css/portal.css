@@ -256,11 +256,14 @@ p { line-height:1.5; }
   .modal-poster { width:84px; height:126px; }
   .technical-list { grid-template-columns:1fr; }
   .modal-sessions > div { align-items:flex-start; flex-direction:column; border-radius:8px; }
-  .session-button { min-height:44px; padding:8px 8px 8px 11px; gap:7px; }
-  .session-button strong { font-size:16px; }
+  .session-groups { width:100%; display:grid; align-items:stretch; gap:8px; }
+  .session-button { width:100%; min-height:54px; display:grid; grid-template-columns:auto minmax(0,1fr) auto; grid-template-areas:"time audio action" "time formats action"; column-gap:9px; row-gap:3px; padding:8px 10px; border-radius:12px; }
+  .session-button strong { grid-area:time; align-self:center; font-size:17px; }
+  .session-button > span:not(.format-badges) { grid-area:audio; align-self:end; }
+  .session-button .format-badges { grid-area:formats; align-self:start; flex-wrap:wrap; }
   .session-button span { font-size:12px; }
   .session-button small { display:none; }
-  .session-button em { margin-left:auto; padding:7px 12px; font-size:11px; }
+  .session-button em { grid-area:action; align-self:center; margin-left:0; padding:8px 13px; font-size:11px; }
   .account-shell { grid-template-columns:1fr; gap:10px; margin:12px auto; }
   .account-shell > div { padding:0; }
   .form-columns { grid-template-columns:1fr; }
