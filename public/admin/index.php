@@ -991,7 +991,7 @@ try {
                     <label>Antecedência para liberar check-in (minutos)<input name="checkin_advance_minutes" type="number" min="0" max="240" value="<?= e($settings['checkin_advance_minutes']) ?>"><small>Exemplo: 30 libera a entrada meia hora antes da sessão.</small></label>
                     <div class="settings-title"><h2>Módulos e leitores</h2></div>
                     <label class="check-label"><input type="checkbox" name="public_products_enabled" value="1" <?= $settings['public_products_enabled'] ? 'checked' : '' ?>> Habilitar delícias na venda pela internet</label>
-                    <label class="check-label"><input type="checkbox" name="admin_products_enabled" value="1" <?= $settings['admin_products_enabled'] ? 'checked' : '' ?>> Habilitar delícias na venda administrativa</label>
+                    <label class="check-label"><input type="checkbox" name="admin_products_enabled" value="1" <?= $settings['admin_products_enabled'] ? 'checked' : '' ?>> Habilitar delícias na venda administrativa junto com ingressos</label>
                     <label class="check-label"><input type="checkbox" name="qr_beep_enabled" value="1" <?= $settings['qr_beep_enabled'] ? 'checked' : '' ?>> Tocar bip nas leituras de QR Code</label>
                     <div class="logo-upload-row">
                         <?php if ($settings['has_logo']): ?><img class="cinema-logo-preview" src="index.php?route=cinema_logo" alt="Logotipo atual"><?php endif; ?>
@@ -2403,14 +2403,6 @@ try {
         Auth::requireLogin();
         $cash = open_cash_register();
         if (!$cash) redirect_to('cash_register');
-        $cinemaSettings = cinema_settings();
-        if (empty($cinemaSettings['admin_products_enabled'])) {
-            layout('Venda de Delícias', function () {
-                ?><div class="section-head"><h1>Venda de Delícias</h1></div><p class="alert">A venda administrativa de produtos está desabilitada nas configurações do cinema.</p><?php
-            });
-            exit;
-        }
-
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             verify_csrf();
             $quantities = [];
