@@ -78,6 +78,7 @@ function layout(string $title, callable $content): void
                             <?php endif; ?>
                             <li class="nav-header">OPERAÇÃO</li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['sales', 'sale_new', 'ticket_receipt', 'ticket_print', 'ticket_cancel', 'showtime_close', 'showtime_report'], true) ? 'active' : '' ?>" href="index.php?route=sales"><i></i><p>Venda</p></a></li>
+                            <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['product_sale', 'product_sale_complete'], true) ? 'active' : '' ?>" href="index.php?route=product_sale"><i></i><p>Venda de Delícias</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['cash_register', 'cash_receipt'], true) ? 'active' : '' ?>" href="index.php?route=cash_register"><i></i><p>Caixa</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['qr_reader', 'ticket_validate'], true) ? 'active' : '' ?>" href="index.php?route=qr_reader"><i></i><p>Check-in QR</p></a></li>
                             <li class="nav-item"><a class="nav-link <?= in_array($currentRoute, ['product_pickup', 'product_pickup_lookup'], true) ? 'active' : '' ?>" href="index.php?route=product_pickup"><i></i><p>Retira de Produtos</p></a></li>
@@ -914,7 +915,7 @@ try {
     if (in_array($route, ['rooms', 'room_new', 'room_edit', 'sales', 'sale_new', 'ticket_receipt', 'ticket_cancel'], true)) {
         ensure_room_seat_availability_columns();
     }
-    if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'ticket_receipt', 'ticket_cancel', 'ticket_print', 'sale_receipt_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
+    if (in_array($route, ['dashboard', 'cash_register', 'cash_receipt', 'product_categories', 'products', 'sale_new', 'product_sale', 'product_sale_complete', 'ticket_receipt', 'ticket_cancel', 'ticket_print', 'sale_receipt_print', 'product_receipt', 'product_pickup', 'product_pickup_lookup', 'product_report'], true)) {
         ensure_product_tables();
     }
     if (in_array($route, ['public_settings', 'movies', 'movie_new', 'movie_edit', 'rooms', 'room_new', 'room_edit', 'showtimes', 'showtime_new', 'showtime_edit'], true)) PublicPortal::ensureSchema(db());
@@ -2356,6 +2357,183 @@ try {
         exit;
     }
 
+    if ($route === 'product_sale_complete') {
+        Auth::requireLogin();
+        $saleCode = trim($_GET['sale_code'] ?? '');
+        $stmt = db()->prepare(
+            'SELECT product_sales.sale_code, product_sales.total_amount, product_sales.payment_method,
+                COUNT(product_sale_items.id) item_count
+             FROM product_sales
+             INNER JOIN product_sale_items ON product_sale_items.product_sale_id=product_sales.id
+             WHERE product_sales.sale_code=?
+             GROUP BY product_sales.id, product_sales.sale_code, product_sales.total_amount, product_sales.payment_method'
+        );
+        $stmt->execute([$saleCode]);
+        $sale = $stmt->fetch();
+        if (!$sale) throw new RuntimeException('Venda de produtos não encontrada.');
+
+        layout('Venda de Delícias', function () use ($sale) {
+            $printUrl = 'index.php?route=product_receipt&auto=1&sale_code=' . urlencode($sale['sale_code']);
+            ?>
+            <div class="section-head">
+                <div><h1>Venda concluída</h1><p class="muted"><?= (int) $sale['item_count'] ?> produto(s) preparado(s) para retirada.</p></div>
+                <div class="toolbar">
+                    <a class="button" href="<?= e($printUrl) ?>" target="_blank" rel="noopener">Imprimir produtos</a>
+                    <a class="button primary" href="index.php?route=product_sale">Nova venda de delícias</a>
+                </div>
+            </div>
+            <section class="panel">
+                <p><strong>Venda:</strong> <?= e($sale['sale_code']) ?></p>
+                <p><strong>Pagamento:</strong> <?= e(ucfirst($sale['payment_method'])) ?></p>
+                <p><strong>Total:</strong> R$ <?= e(number_format((float) $sale['total_amount'], 2, ',', '.')) ?></p>
+            </section>
+            <script>
+                (() => {
+                    const printUrl = <?= json_encode($printUrl, JSON_UNESCAPED_SLASHES) ?>;
+                    const popup = window.open(printUrl, 'cinema_product_print_pending', 'popup=yes,width=420,height=720');
+                    if (popup) popup.focus();
+                })();
+            </script>
+            <?php
+        });
+        exit;
+    }
+
+    if ($route === 'product_sale') {
+        Auth::requireLogin();
+        $cash = open_cash_register();
+        if (!$cash) redirect_to('cash_register');
+        $cinemaSettings = cinema_settings();
+        if (empty($cinemaSettings['admin_products_enabled'])) {
+            layout('Venda de Delícias', function () {
+                ?><div class="section-head"><h1>Venda de Delícias</h1></div><p class="alert">A venda administrativa de produtos está desabilitada nas configurações do cinema.</p><?php
+            });
+            exit;
+        }
+
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            verify_csrf();
+            $quantities = [];
+            foreach ((array) ($_POST['product_qty'] ?? []) as $productId => $quantity) {
+                $quantity = min(50, max(0, (int) $quantity));
+                if ($quantity > 0) $quantities[(int) $productId] = $quantity;
+            }
+            if (!$quantities) throw new RuntimeException('Adicione pelo menos um produto.');
+
+            $paymentMethod = $_POST['payment_method'] ?? 'dinheiro';
+            if (!in_array($paymentMethod, ['dinheiro', 'cartao', 'pix'], true)) $paymentMethod = 'dinheiro';
+            $amountPaid = money_to_decimal($_POST['amount_paid'] ?? '0');
+
+            db()->beginTransaction();
+            try {
+                $productIds = array_keys($quantities);
+                $placeholders = implode(',', array_fill(0, count($productIds), '?'));
+                $stmt = db()->prepare(
+                    "SELECT products.id, products.name, products.price, products.stock_quantity
+                     FROM products
+                     INNER JOIN product_categories ON product_categories.id=products.category_id
+                     WHERE products.id IN ($placeholders)
+                       AND products.active=1
+                       AND product_categories.active=1
+                     FOR UPDATE"
+                );
+                $stmt->execute($productIds);
+                $productsById = [];
+                foreach ($stmt->fetchAll() as $product) $productsById[(int) $product['id']] = $product;
+                if (count($productsById) !== count($productIds)) throw new RuntimeException('Um dos produtos não está mais disponível.');
+
+                $total = 0.0;
+                foreach ($quantities as $productId => $quantity) {
+                    $product = $productsById[$productId];
+                    if ($product['stock_quantity'] !== null && (int) $product['stock_quantity'] < $quantity) {
+                        throw new RuntimeException('Estoque insuficiente para ' . $product['name'] . '.');
+                    }
+                    $total += (float) $product['price'] * $quantity;
+                }
+                if ($paymentMethod === 'dinheiro' && $amountPaid < $total) {
+                    throw new RuntimeException('Valor recebido em dinheiro é menor que o total da venda.');
+                }
+
+                $saleCode = sale_code();
+                $sale = db()->prepare(
+                    'INSERT INTO product_sales(sale_code,seller_user_id,cash_register_id,payment_method,total_amount,sold_at)
+                     VALUES(?,?,?,?,?,NOW())'
+                );
+                $sale->execute([$saleCode, (int) Auth::user()['id'], (int) $cash['id'], $paymentMethod, $total]);
+                $productSaleId = (int) db()->lastInsertId();
+                $item = db()->prepare('INSERT INTO product_sale_items(product_sale_id,product_id,unit_price,qr_token) VALUES(?,?,?,?)');
+                $stock = db()->prepare('UPDATE products SET stock_quantity=stock_quantity-? WHERE id=? AND stock_quantity IS NOT NULL');
+                foreach ($quantities as $productId => $quantity) {
+                    for ($i = 0; $i < $quantity; $i++) {
+                        $item->execute([$productSaleId, $productId, (float) $productsById[$productId]['price'], ticket_token()]);
+                    }
+                    $stock->execute([$quantity, $productId]);
+                }
+                db()->commit();
+            } catch (Throwable $exception) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $exception;
+            }
+
+            header('Location: index.php?route=product_sale_complete&sale_code=' . urlencode($saleCode));
+            exit;
+        }
+
+        $categories = db()->query(
+            'SELECT product_categories.*
+             FROM product_categories
+             WHERE product_categories.active=1
+               AND EXISTS(SELECT 1 FROM products WHERE products.category_id=product_categories.id AND products.active=1 AND (products.stock_quantity IS NULL OR products.stock_quantity>0))
+             ORDER BY COALESCE(parent_id,id), parent_id IS NOT NULL, sort_order, name'
+        )->fetchAll();
+        $products = db()->query(
+            'SELECT products.id,products.category_id,products.name,products.price,products.stock_quantity,
+                products.image_data IS NOT NULL has_image,product_categories.name category_name
+             FROM products
+             INNER JOIN product_categories ON product_categories.id=products.category_id
+             WHERE products.active=1 AND product_categories.active=1
+               AND (products.stock_quantity IS NULL OR products.stock_quantity>0)
+             ORDER BY products.sort_order,product_categories.sort_order,products.name'
+        )->fetchAll();
+
+        layout('Venda de Delícias', function () use ($categories, $products) {
+            ?>
+            <div class="section-head"><div><h1>Venda de Delícias</h1><p class="muted">Venda produtos diretamente, sem selecionar filme ou poltrona.</p></div></div>
+            <form method="post" id="product-sale-form" class="product-sale-layout">
+                <input type="hidden" name="csrf_token" value="<?= e(csrf_token()) ?>">
+                <nav class="panel product-sale-categories" aria-label="Categorias de produtos">
+                    <button type="button" class="active" data-category="all"><i data-lucide="layout-grid"></i><span>Todos</span></button>
+                    <?php foreach ($categories as $category): ?>
+                        <button type="button" data-category="<?= (int) $category['id'] ?>" class="<?= $category['parent_id'] ? 'child' : '' ?>"><i data-lucide="<?= e($category['icon']) ?>"></i><span><?= e($category['name']) ?></span></button>
+                    <?php endforeach; ?>
+                </nav>
+                <section class="product-sale-products">
+                    <?php foreach ($products as $product): ?>
+                        <article class="product-pick-card" data-category="<?= (int) $product['category_id'] ?>" data-price="<?= e($product['price']) ?>" data-max="<?= $product['stock_quantity'] === null ? 50 : min(50, (int) $product['stock_quantity']) ?>">
+                            <?php if ($product['has_image']): ?><img class="product-pick-image" src="index.php?route=product_image&id=<?= (int) $product['id'] ?>" alt=""><?php else: ?><span class="product-pick-image placeholder"><i data-lucide="package"></i></span><?php endif; ?>
+                            <div class="product-pick-info"><strong><?= e($product['name']) ?></strong><span><?= e($product['category_name']) ?></span><b>R$ <?= e(number_format((float) $product['price'], 2, ',', '.')) ?></b><?php if ($product['stock_quantity'] !== null): ?><small>Estoque: <?= (int) $product['stock_quantity'] ?></small><?php endif; ?></div>
+                            <div class="quantity-stepper"><button type="button" data-delta="-1" aria-label="Diminuir">−</button><input name="product_qty[<?= (int) $product['id'] ?>]" type="number" min="0" max="<?= $product['stock_quantity'] === null ? 50 : min(50, (int) $product['stock_quantity']) ?>" value="0" readonly><button type="button" data-delta="1" aria-label="Adicionar">+</button></div>
+                        </article>
+                    <?php endforeach; ?>
+                    <?php if (!$products): ?><section class="panel"><p>Nenhum produto disponível para venda.</p></section><?php endif; ?>
+                </section>
+                <aside class="panel product-sale-checkout">
+                    <span class="eyebrow">Resumo</span>
+                    <h2>Produtos</h2>
+                    <p><span>Unidades</span><strong id="product-sale-count">0</strong></p>
+                    <p class="total"><span>Total</span><strong id="product-sale-total">R$ 0,00</strong></p>
+                    <label>Forma de pagamento<select name="payment_method" id="product-payment-method"><option value="dinheiro">Dinheiro</option><option value="cartao">Cartão</option><option value="pix">Pix</option></select></label>
+                    <label id="product-amount-row">Valor recebido<input name="amount_paid" id="product-amount-paid" inputmode="decimal" placeholder="Ex: 50,00"></label>
+                    <p id="product-change-row"><span>Troco</span><strong id="product-sale-change">R$ 0,00</strong></p>
+                    <button class="button primary" id="finish-product-sale" disabled>Finalizar venda</button>
+                </aside>
+            </form>
+            <script src="/assets/js/product-sale.js?v=<?= (int) filemtime(__DIR__ . '/../assets/js/product-sale.js') ?>"></script>
+            <?php
+        });
+        exit;
+    }
+
     if ($route === 'sales') {
         Auth::requireLogin();
         $cash = open_cash_register();
@@ -3098,7 +3276,7 @@ try {
         $cinema = cinema_settings();
         ?><!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Produtos <?=e($saleCode)?></title><style>
         *{box-sizing:border-box}body{margin:0;color:#000;background:#fff;font:12px/1.25 "Courier New",monospace}.actions{text-align:center;padding:12px;background:#eee}.actions button{padding:9px 14px;border:0;background:#c2410c;color:#fff;font-weight:700}.product-receipt{width:40ch;max-width:calc(100% - 8mm);margin:auto;padding:4mm 0}.product-receipt+.product-receipt{break-before:page;page-break-before:always}.receipt-logo{display:block;max-width:30mm;max-height:18mm;object-fit:contain;margin:0 auto 2mm;filter:grayscale(1)}h1{text-align:center;font-size:15px}.line{overflow:hidden}.line:before{content:"----------------------------------------"}p{margin:3px 0}[data-ticket-qr]{width:36mm;height:36mm;margin:8px auto}[data-ticket-qr] img,[data-ticket-qr] canvas{width:36mm!important;height:36mm!important;display:block}.code{text-align:center;font-size:8px;word-break:break-all}@media print{.actions{display:none}.product-receipt{width:40ch;max-width:none;padding:0}@page{size:80mm auto;margin:3mm}}
-        </style></head><body><div class="actions"><button id="print-products">Imprimir produtos</button></div><?php foreach($items as $item):$url=app_url('product_pickup_lookup',['token'=>$item['qr_token']]);?><main class="product-receipt"><?php if($cinema['has_logo']):?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif;?><h1>RETIRADA DE PRODUTO</h1><div class="line"></div><p><strong>Venda:</strong> <?=e($item['sale_code'])?></p><p><strong>Produto:</strong> <?=e($item['product_name'])?></p><p><strong>Categoria:</strong> <?=e($item['category_name'])?></p><p><strong>Valor:</strong> R$ <?=e(number_format((float)$item['unit_price'],2,',','.'))?></p><div class="line"></div><div data-ticket-qr data-url="<?=e($url)?>"></div><div class="code"><?=e($item['qr_token'])?></div><p style="text-align:center;font-weight:bold">Apresente no balcão de retirada.</p></main><?php endforeach;?><script src="/assets/js/vendor/qrcode.min.js"></script><script src="/assets/js/ticket-qr.js"></script><script>document.getElementById('print-products').onclick=async()=>{await(window.ticketQrReady||Promise.resolve());window.print();};</script></body></html><?php exit;
+        </style></head><body><div class="actions"><button id="print-products">Imprimir produtos</button></div><?php foreach($items as $item):$url=app_url('product_pickup_lookup',['token'=>$item['qr_token']]);?><main class="product-receipt"><?php if($cinema['has_logo']):?><img class="receipt-logo" src="index.php?route=cinema_logo" alt=""><?php endif;?><h1>RETIRADA DE PRODUTO</h1><div class="line"></div><p><strong>Venda:</strong> <?=e($item['sale_code'])?></p><p><strong>Produto:</strong> <?=e($item['product_name'])?></p><p><strong>Categoria:</strong> <?=e($item['category_name'])?></p><p><strong>Valor:</strong> R$ <?=e(number_format((float)$item['unit_price'],2,',','.'))?></p><div class="line"></div><div data-ticket-qr data-url="<?=e($url)?>"></div><div class="code"><?=e($item['qr_token'])?></div><p style="text-align:center;font-weight:bold">Apresente no balcão de retirada.</p></main><?php endforeach;?><script src="/assets/js/vendor/qrcode.min.js"></script><script src="/assets/js/ticket-qr.js"></script><script>const printProducts=async()=>{await(window.ticketQrReady||Promise.resolve());window.print();};document.getElementById('print-products').onclick=printProducts;<?php if(!empty($_GET['auto'])):?>window.addEventListener('load',()=>window.setTimeout(printProducts,250));<?php endif;?></script></body></html><?php exit;
     }
 
     if ($route === 'product_pickup_lookup') {
